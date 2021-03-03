@@ -1,0 +1,221 @@
+cmake_minimum_required(VERSION 3.0.2)
+
+project(mupix8_daq)
+
+option(BUILD_GUI_SINGLE "compile gui for the single setup control" ON)
+option(BUILD_GUI_TELESCOPE "compile gui for the telescope setup" ON)
+option(BUILD_TESTBEAM_ANALYZER "compile gui for the testbeam analyzer" ON)
+option(BUILD_GUI_TEST "compile gui for testing" ON)
+
+option(BUILD_GUI_EMULATOR "compile emulator gui" OFF)
+option(BUILD_MIDAS "compile Midas-based daq code" OFF)
+option(BUILD_EUDAQ "include eudaq libraries" OFF)
+option(BUILD_CUDA "compile with cuda and nvcc, needed for GPU computing" OFF)
+
+option(BUILD_ANALYSIS "compile data analysis" ON)
+option(BUILD_ALIGNMENT "compile telescope alignment using watson" OFF)
+option(BUILD_PLOTTING "compile macros used for plotting of testbeam data" OFF)
+
+option(BUILD_MSCB "compile the MSCB features" OFF)
+option(BUILD_TESTS "compile test features" ON)
+option(BUILD_SIMPX "compile simple mpx programs" ON)
+option(BUILD_TOOLS "compile tool features" ON)
+option(BUILD_STANDALONE_ANALYSIS "compile standalone analysis" ON)
+
+message("\nCompiler : ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
+list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
+
+INCLUDE("cmake/compiler-flag-checks.cmake")
+# Check for C++17 and require C++17 if available else fallback to C++14 (is currently more than sufficient)
+CHECK_CXX_COMPILER_FLAG(-std=c++17 SUPPORT_STD_CXX17)
+IF(SUPPORT_STD_CXX17)
+    SET(CMAKE_CXX_STANDARD 17)
+    MESSAGE("Using available c++17")
+ELSE()
+    SET(CMAKE_CXX_STANDARD 14)
+    MESSAGE("Using available c++14")
+ENDIF()
+SET(CMAKE_CXX_STANDARD_REQUIRED ON)
+SET(CMAKE_CXX_EXTENSIONS OFF)
+
+set(CMAKE_CXX_FLAGS_DEBUG "")
+
+SET(CMAKE_BUILD_TYPE DEBUG)
+
+IF(CMAKE_BUILD_TYPE MATCHES DEBUG)
+    message("CMAKE_BUILD_TYPE = ${CMAKE_BUILD_TYPE}")
+endif()
+
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTOUIC ON)
+
+
+find_package(Boost REQUIRED system filesystem program_options)
+find_package(Eigen3 REQUIRED)
+
+# check if we on Arch Linux and find_package MPI, OpenMP and Threads
+IF(CMAKE_SYSTEM_NAME MATCHES "Linux")
+        execute_process (
+                COMMAND bash -c "awk -F= '/^ID=/{print $2}' /etc/os-release |tr -d '\n' | tr -d '\"'"
+                OUTPUT_VARIABLE outOS
+        )
+        IF(${outOS} MATCHES "arch")
+            find_package(MPI)
+            find_package(OpenMP)
+            find_package(Threads)
+        ENDIF()
+ENDIF()
+
+FIND_PACKAGE(ROOT REQUIRED COMPONENTS vectorDict Minuit Minuit2 Gui GenVector Geom Core Hist RIO NO_MODULE)
+
+IF(ROOT_CXX_FLAGS MATCHES ".*std=c\\+\\+1[7z].*")
+    IF(NOT SUPPORT_STD_CXX17)
+        MESSAGE(FATAL_ERROR "ROOT was built with C++17 support but current compiler doesn't support it")
+    ENDIF()
+ELSEIF(ROOT_CXX_FLAGS MATCHES ".*std=c\\+\\+1[4y].*")
+    SET(CMAKE_CXX_STANDARD 14)
+ELSEIF(ROOT_CXX_FLAGS MATCHES ".*std=c\\+\\+1[1].*")
+    SET(CMAKE_CXX_STANDARD 11)
+    #MESSAGE(FATAL_ERROR "ROOT built with c++11, but c++14 or higher is required")
+ELSEIF(ROOT_CXX_FLAGS MATCHES ".*std=c\\+\\+.*")
+    MESSAGE(FATAL_ERROR "ROOT was built with an unsupported C++ version: ${ROOT_CXX_FLAGS}")
+ELSE()
+    MESSAGE(FATAL_ERROR "Could not deduce ROOT's C++ version from build flags: ${ROOT_CXX_FLAGS}")
+ENDIF()
+
+# Check ROOT version
+IF (NOT ${ROOT_VERSION} VERSION_GREATER "6.0")
+    MESSAGE(FATAL_ERROR "ROOT versions below 6.0 are not supported")
+ENDIF()
+
+
+# all GUIs are based on qt5
+find_package(Qt5Widgets REQUIRED)
+message("--- ${Qt5Widgets_INCLUDE_DIRS}")
+include_directories(${Qt5Widgets_INCLUDE_DIRS})
+add_definitions(${Qt5Widgets_DEFINITIONS})
+
+# for EUDAQ and testbeam purposes
+if(BUILD_EUDAQ)
+	#list(APPEND CMAKE_MODULE_PATH ${eudaq_DIR}/cmake)
+    find_package(eudaq REQUIRED NO_CMAKE_PACKAGE_REGISTRY NO_CMAKE_SYSTEM_PATH)
+    message("---${EUDAQ_INCLUDE_DIRS}")
+    include_directories(${EUDAQ_INCLUDE_DIRS})
+    add_definitions(-DEUDAQ)
+endif(BUILD_EUDAQ)
+
+# GenVector is not part of the default root libraries - warning currently ignored!
+include_directories(${Boost_INCLUDE_DIRS})
+include_directories(${EIGEN3_INCLUDE_DIR})
+include_directories(${ROOT_INCLUDE_DIRS})
+include_directories(library)
+add_subdirectory(library)
+include_directories(gui/workers)
+add_subdirectory(gui/workers)
+include_directories(analysis/libana)
+add_subdirectory(analysis/libana)
+
+
+if(DEFINED ENV{MUPIX8DAQ})
+        MESSAGE(STATUS "environment set: MUPIX8DAQ=$ENV{MUPIX8DAQ}")
+else()
+    MESSAGE(FATAL_ERROR "export MUPIX8DAQ=/path-to-repo/mupix8_daq in .bashrc")
+endif()
+
+
+# optional components
+
+if(BUILD_GUI_TEST)
+add_subdirectory(gui/testgui)
+endif(BUILD_GUI_TEST)
+
+if(BUILD_ALIGNMENT)
+    find_package(WATSON REQUIRED)
+    if (WATSON_FOUND)
+      message("-- WATSON version ${WATSON_VERSION_MAJOR} was found")
+    else(WATSON_FOUND)
+      message("* WATSON is not found")
+      message(FATAL_ERROR "Not all WATSON libraries are found")
+    endif(WATSON_FOUND)
+    add_subdirectory(alignment_watson)
+    INCLUDE_DIRECTORIES(alignment_watson)
+endif(BUILD_ALIGNMENT)
+
+if(BUILD_CUDA)
+    add_subdirectory(gpu)
+    include_directories(/usr/local/cuda/include)
+    find_package(CUDA REQUIRED)
+
+    if (CUDA_FOUND)
+        message("-- CUDA ${CUDA_VERSION_MAJOR} was found at ${CUDA_TOOLKIT_ROOT_DIR}")
+    else(CUDA_FOUND)
+        message("* CUDA is not found")
+        message(FATAL_ERROR "Not all CUDA libraries are found")
+    endif(CUDA_FOUND)
+    list(APPEND CUDA_NVCC_FLAGS "-arch=sm_30;-std=c++11;-O3;-DVERBOSE;-g")
+
+    #add_subdirectory(speedtest)
+    add_subdirectory(gpu)
+    list(APPEND CUDA_NVCC_FLAGS --ptxas-options=-v -O3 -G -g)    # original DvB
+    list(APPEND CUDA_NVCC_FLAGS -gencode arch=compute_30,code=sm_30 )
+    list(APPEND CUDA_NVCC_FLAGS -Xcompiler -std=c++11)
+
+    set(CUDA_NVCC_FLAGS "-arch=sm_30;-std=c++11;-O3;-DVERBOSE;-lineinfo;-g")
+    SET(CUDA_PROPAGATE_HOST_FLAGS OFF)
+    add_definitions(-DCUDA)
+endif(BUILD_CUDA)
+
+if(BUILD_ANALYSIS)
+        message("Analysis is build")
+        add_subdirectory(analysis)
+endif(BUILD_ANALYSIS)
+
+if(BUILD_MSCB)
+ message("Building MSCB parts")
+ include_directories(${PROJECT_SOURCE_DIR}/external/mscb)
+ LINK_DIRECTORIES(${PROJECT_SOURCE_DIR}/external/mscb)
+ add_library(libmscb SHARED IMPORTED ${PROJECT_SOURCE_DIR}/external/mscb/libmscb.so)
+ add_definitions(-DBUILD_MSCB)
+endif(BUILD_MSCB)
+
+if(BUILD_MIDAS)
+    add_subdirectory(midas)
+endif(BUILD_MIDAS)
+
+if(BUILD_PLOTTING)
+	add_subdirectory(plotting)
+endif(BUILD_PLOTTING)
+
+if(BUILD_GUI_SINGLE)
+    add_subdirectory(gui/single)
+endif(BUILD_GUI_SINGLE)
+
+if(BUILD_GUI_TELESCOPE)
+    add_subdirectory(gui/telescope)
+endif(BUILD_GUI_TELESCOPE)
+
+if(BUILD_TESTBEAM_ANALYZER AND BUILD_ANALYSIS)
+    message("Testbeamanalyzer is build")
+    add_subdirectory(gui/testbeam_analyzer)
+    add_subdirectory(gui/testbeam_analysis_config)
+endif(BUILD_TESTBEAM_ANALYZER AND BUILD_ANALYSIS)
+
+if(BUILD_GUI_EMULATOR)
+    add_subdirectory(gui/emulator)
+endif(BUILD_GUI_EMULATOR)
+
+if(BUILD_TESTS)
+    add_subdirectory(tests)
+endif(BUILD_TESTS)
+
+if(BUILD_SIMPX)
+    add_subdirectory(simpx)
+endif(BUILD_SIMPX)
+
+if(BUILD_TOOLS)
+    add_subdirectory(tools)
+endif(BUILD_TOOLS)
+
+if(BUILD_STANDALONE_ANALYSIS)
+    add_subdirectory(single_analysis)
+endif(BUILD_STANDALONE_ANALYSIS)
