@@ -5,6 +5,7 @@
 #include <stropts.h>
 
 #include <unistd.h>
+#include <iomanip>
 #include <string.h>
 #include <atomic>
 
@@ -25,6 +26,133 @@ using namespace mudaq;
 typedef boost::lockfree::spsc_queue<std::vector<uint32_t>*, boost::lockfree::capacity<65536*4> > longvectorqueue;
 typedef boost::lockfree::spsc_queue<uint64_t, boost::lockfree::capacity<65536> > wordqueue_64bit;
 
+// ----------------------------------------------------------------------
+//
+void dump_register(mudaq::MudaqDevice * dev, string filename, bool endOfRun) {
+  cout << "Writing register dump"<<endl;
+  vector<uint32_t> registerValues;
+  // read regs
+  for(unsigned i = 0; i<64;++i)
+    registerValues.push_back(dev->read_register_ro(i));
+  // write regs
+  for(unsigned i = 0; i<64;++i)
+    registerValues.push_back(dev->read_register_rw(i));
+
+  fstream file;
+  vector<string> lines;
+  if(endOfRun)
+    {
+      file.open(filename,ios::in);
+      if(!file.is_open())
+	return;
+      string line;
+      while(getline(file, line))
+        {
+	  lines.push_back(line);
+	  //  cout << line <<endl;
+        }
+      //cout << lines.size()<<"----------------------------------------------" <<endl;
+      if(lines.size()!=128+4)
+	cout << "wrong number of lines in file"<<endl;
+      file.close();
+      file.open(filename,ios::trunc | ios::out);
+
+      file<<lines.at(0)<<endl<<lines.at(1)<<endl;
+      for(int i = 0;i<64;++i)
+	file<<hex<< lines.at(i+2)<< '\t'<< boost::format("0x%08x") %  registerValues.at(i)<<endl;
+      file<<lines.at(66)<<endl<<lines.at(67)<<endl;
+      for(int i = 64;i<128;++i)
+	file<< hex <<lines.at(i+4)<< '\t'<< boost::format("0x%08x") %  registerValues.at(i)<<endl;
+      file.close();
+    }
+  else
+    {
+      file.open(filename,ios::out);
+      if(!file.is_open())
+	return;
+      file<< "************************ READREGS***********************"<<endl<<"Register \t Value start \t Value stop"<<endl;
+      for(int i = 0; i<64;++i)
+	file<< hex << boost::format("0x%02x\t")%i<< boost::format("0x%08x") %  registerValues.at(i)<<endl;
+      file<< "************************ WRITEREGS**********************"<<endl<<"Register \t Value start \t Value stop"<<endl;
+      for(int i = 64; i<128;++i)
+	file<< hex << (i-64) <<"\t"<< boost::format("0x%08x") %  registerValues.at(i)<<endl;
+      file.close();
+    }
+  return;
+}
+
+
+uint32_t pr_append_local(uint32_t old_value, uint32_t value, uint32_t mask, uint32_t offset) {
+  uint32_t temp;
+  cout << hex << "val         = " << value << endl;
+  cout << hex << "msk         = " << mask << endl;
+  cout << hex << "off         = " << offset << endl;
+  cout << hex << "m<o         = " << (mask << offset) << endl;
+  cout << hex << "~           = " << ~ (mask << offset) << endl;
+  cout << hex << "old         = " << old_value << endl;
+  temp = old_value & (~ (mask << offset));
+  cout << hex << "old&~(m<<o) = " << temp << endl;
+  temp = temp | ((value & mask) << offset);
+  cout << hex << "val&msk     = " << (value & mask) << endl;
+  cout << hex << "tmp         = " << temp << endl;
+  cout << "===" << endl;
+  return temp;
+}
+
+void pr_append_register(uint32_t value, uint32_t mask, uint32_t offset, unsigned oldvalue) {
+  uint32_t temp = oldvalue;
+  temp = pr_append_local(temp, value, mask, offset);
+  cout << hex << "oldval      = " <<  oldvalue << endl;
+  cout << hex << "value       = " <<  value << endl;
+  cout << hex << " mask       = " <<  mask << endl;
+  cout << hex << "offst       = " <<  offset << endl;
+  cout << hex << " temp       = " <<  temp << endl;
+}
+
+
+// ----------------------------------------------------------------------
+void replaceAll(string &str, const string &from, const string &to) {
+  if (from.empty()) return;
+  size_t start_pos = 0;
+  while((start_pos = str.find(from, start_pos)) != string::npos) {
+    str.replace(start_pos, from.length(), to);
+    start_pos += to.length(); // In case 'to' contains 'from', like replacing 'x' with 'yx'
+  }
+}
+
+// ----------------------------------------------------------------------
+bool bothAreSpaces(char lhs, char rhs) {
+  return (lhs == rhs) && (lhs == ' ');
+}
+
+// ----------------------------------------------------------------------
+void cleanupString(string &s) {
+  replaceAll(s, "\t", " ");
+  string::size_type s1 = s.find("#");
+  if (string::npos != s1) s.erase(s1);
+  if (0 == s.length()) return;
+  string::iterator new_end = unique(s.begin(), s.end(), bothAreSpaces);
+  s.erase(new_end, s.end());
+  if (s.substr(0, 1) == string(" ")) s.erase(0, 1);
+  if (s.substr(s.length()-1, 1) == string(" ")) s.erase(s.length()-1, 1);
+}
+
+// ----------------------------------------------------------------------
+vector<string>& split(const string &s, char delim, vector<string> &elems) {
+  stringstream ss(s);
+  string item;
+  while (getline(ss, item, delim)) {
+    elems.push_back(item);
+  }
+  return elems;
+}
+
+// ----------------------------------------------------------------------
+vector<string> split(const string &s, char delim) {
+  vector<string> elems;
+  split(s, delim, elems);
+  return elems;
+}
 
 
 // ----------------------------------------------------------------------
@@ -50,11 +178,14 @@ int kbhit() {
 // ----------------------------------------------------------------------
 // -- many global things!
 // ----------------------------------------------------------------------
-bool gDMA, gMask, gSorted, gTS, gTS2;
+
+bool gDDR3, gHistos;
+bool gIsDma;
 
 // -- chip configuration
 mudaq::MupixSensor *s0(0);
-DmaMudaqDevice *dev(0);
+MudaqDevice *dev(0);
+DmaMudaqDevice *devDma(0);
 
 vector<mudaq::ChipDacsConfig*> chipdacs_config;
 vector<map<string,mudaq::ChipDac*>*> chipdacs_map;
@@ -78,35 +209,144 @@ vector<wordqueue_64bit*>   _totQueues;
 
 
 // ----------------------------------------------------------------------
+void setDAC(string dac, string val) {
+  //  uint ival = atoi(val.c_str());
+  uint ival = std::stoi(val, 0, 16);
+  (*chipdacs_map[0])[dac.c_str()]->set_value(ival);
+  cout << "DAC " << dac << " write value: " << hex << val << endl;
+  s0->update_chip_dacs(*(chipdacs_config[0]));
+
+  uint32_t temp = dev->read_register_rw(LINK_REGISTER_W);
+  dev->write_register(LINK_REGISTER_W, (0xFFFF0000|(temp&LINK_SHARED_MASK)));
+  s0->configure_sensor(false, true);
+  usleep(1000);
+  dev->write_register(LINK_REGISTER_W,temp);
+  std::cout << "Configuring done." << std::endl;
+
+
+}
+
+
+// ----------------------------------------------------------------------
+void mem(uint32_t nwords, uint32_t offset) {
+  int istart(offset);
+  uint32_t last_written = (dev->read_register_ro(MEM_ADDRESS_REGISTER_R)>>EOE_ADDRESS_OFFSET) & EOE_ADDRESS_MASK;
+  uint32_t write_ptr = (dev->read_register_ro(DDR3_WR_ADDRESS_REGISTER_R)) & DDR3_WR_ADDRESS_MASK;
+  uint32_t read_ptr = (dev->read_register_ro(DDR3_RD_ADDRESS_REGISTER_R)) & DDR3_RD_ADDRESS_MASK;
+
+  uint32_t ntot(nwords);
+  ofstream file;
+  if (nwords == 0) {
+    ntot = MUDAQ_MEM_RO_LEN;
+    cout << "open file to write " << ntot << " words" << endl;
+    file.open("MemoryDump.txt",ios::out|ios::trunc);
+  }
+
+  if (nwords == 0) {
+    cout << hex
+	 << "rr_ro(DDR3_WR_ADDRESS_REGISTER_R): " << write_ptr
+	 << " rr_ro(DDR3_RD_ADDRESS_REGISTER_R): " << read_ptr
+	 << " 'rr_ro(MEM_ADDRESS_REGISTER_R)': " << last_written
+	 << " DDR3 %: " << dev->get_DDR3_filling_status()
+	 << " MUDAQ_MEM_RO_MASK = " << MUDAQ_MEM_RO_MASK
+      // << " (DDR3_WR/RD_ADDRESS_MASKs = " << DDR3_WR_ADDRESS_MASK << "/" << DDR3_RD_ADDRESS_MASK << ")"
+      // << "(EOE_ADDRESS_OFFSET = "  << EOE_ADDRESS_OFFSET  << "/EOE_ADDRESS_MASK = " << EOE_ADDRESS_MASK
+	 << endl;
+    cout << "dev->read_register_ro(MEM_ADDRESS_REGISTER_R) = " << hex
+	 << dev->read_register_ro(MEM_ADDRESS_REGISTER_R)
+	 << endl;
+  } else {
+    cout << hex
+	 << "rr_ro(DDR3_WR_ADDRESS_REGISTER_R): " << write_ptr
+	 << " rr_ro(DDR3_RD_ADDRESS_REGISTER_R): " << read_ptr
+	 << " 'rr_ro(MEM_ADDRESS_REGISTER_R)': " << last_written
+	 << " DDR3 %: " << dev->get_DDR3_filling_status()
+	 << " MUDAQ_MEM_RO_MASK = " << MUDAQ_MEM_RO_MASK
+      // << " (DDR3_WR/RD_ADDRESS_MASKs = " << DDR3_WR_ADDRESS_MASK << "/" << DDR3_RD_ADDRESS_MASK << ")"
+      // << "(EOE_ADDRESS_OFFSET = "  << EOE_ADDRESS_OFFSET  << "/EOE_ADDRESS_MASK = " << EOE_ADDRESS_MASK
+	 << endl;
+    cout << "dev->read_register_ro(MEM_ADDRESS_REGISTER_R) = " << hex
+	 << dev->read_register_ro(MEM_ADDRESS_REGISTER_R)
+	 << endl;
+  }
+  for (int i = istart; i < istart+ntot; i = i+10) {
+    if (nwords == 0) {
+      file << hex << setw(4) << i << ": ";
+    } else {
+      cout << hex << setw(4) << i << ": ";
+    }
+    for (int j = i; j < i+10; ++j) {
+      if (nwords == 0) {
+	file << setw(10) << dev->read_memory(j& MUDAQ_MEM_RO_MASK) ;
+      } else {
+	cout << setw(10) << dev->read_memory(j& MUDAQ_MEM_RO_MASK) ;
+      }
+    }
+    if (nwords == 0) {
+      file << endl;
+    } else {
+      cout << endl;
+    }
+  }
+  if (nwords == 0) file.close();
+
+}
+
+// ----------------------------------------------------------------------
+void memrw(uint32_t nwords, uint32_t offset) {
+  int istart(offset);
+  for (int i = istart; i < istart+nwords; i = i+10) {
+    cout << hex << setw(4) << i << ": ";
+    for (int j = i; j < i+10; ++j) {
+      //      cout << dev->read_memory_rw(j) << "\t";
+      cout << setw(10) << dev->read_memory_rw(j);
+    }
+    cout << endl;
+  }
+}
+
+
+// ----------------------------------------------------------------------
+void readDAC(string dac) {
+  if ((*chipdacs_map[0])[dac]) {
+    uint value =(*chipdacs_map[0])[dac]->get_value();
+    cout << "DAC " << dac << " read value:  " << hex << value << endl;
+  } else {
+    cout << "DAC " << dac << " not known, ignored" <<endl;
+  }
+}
+
+
+// ----------------------------------------------------------------------
 void linkMask() {
   uint32_t links = 0xFFFF0000;
-  bool doit(gMask);
-  cout << hex << "links: " << links << endl;
+  bool doit(true);
+  cout << hex << "I links: " << links << endl;
   cout << "s0->get_sensor_io_position() = " << s0->get_sensor_io_position() << endl;
   if (doit /*A*/) {
     links -= (0x1 << 16)<<(4*s0->get_sensor_io_position());
-    cout << hex << "links: " << links << endl;
+    cout << hex << "A links: " << links << endl;
   }
 
   if (doit /*B*/) {
     links -= (0x1 << 17)<<(4*s0->get_sensor_io_position());
-    cout << hex << "links: " << links << endl;
+    cout << hex << "B links: " << links << endl;
   }
 
   if (doit /*C*/) {
     links -= (0x1 << 18)<<(4*s0->get_sensor_io_position());
-    cout << hex << "links: " << links << endl;
+    cout << hex << "C links: " << links << endl;
   }
 
-  if (doit /*D mux*/)  {
+  if (0 && doit /*D mux*/)  {
     links -= (0x1 << 19)<<(4*s0->get_sensor_io_position());
-    cout << hex << "links: " << links << endl;
+    cout << hex << "D links: " << links << endl;
   }
 
-  dev->write_register(LINK_REGISTER_W, links);
-  // ??
-  if (gMask) {
+  //??  dev->write_register(LINK_REGISTER_W, links);
+  if (1) {
     dev->write_register(LINK_REGISTER_W, 0xfff80000);
+    //    dev->write_register(LINK_REGISTER_W, 0x00000000);
   } else {
     dev->write_register(LINK_REGISTER_W, 0xfff80000);
   }
@@ -120,12 +360,14 @@ void configureMpx() {
     cout << "no mudaq open" << endl;
     return;
   }
+  dev->write_register_wait(0x2, 0x101, 50000);
+  dev->write_register_wait(0x5, 0x14, 50000);
 
   // ----------------------------------------------------------------------
   // -- Load and setup configuration
   // ----------------------------------------------------------------------
   mudaq::MupixSensor::sensor_type chip_type = mudaq::MupixSensor::convert_ro_to_sensor_type(107);
-  s0 = mudaq::MupixSensor::Factory(chip_type, *dev, 0, 0);
+  s0 = mudaq::MupixSensor::Factory(chip_type, *dev, 0, 0); // 0 is the front SCSI connector, 1 the back
   s0->set_fpga_type("a5");
 
   if (s0->get_sensor_type() == mudaq::MupixSensor::MUPIX10) {
@@ -213,7 +455,7 @@ void configureMpx() {
 
   temp = dev->read_register_rw(LINK_REGISTER_W);
   dev->write_register(LINK_REGISTER_W,(0xFFFF0000|(temp&LINK_SHARED_MASK)));
-  std::cout << "is no frontend: " << LINK_REGISTER_W << " " << (0xFFFF0000|(temp&LINK_SHARED_MASK)) << " " << temp << std::endl;
+  std::cout << "is no frontend: LINK_REGISTER_W " << LINK_REGISTER_W << " " << (0xFFFF0000|(temp&LINK_SHARED_MASK)) << " " << temp << std::endl;
 
   // -- SetChipDACs
   // HITBUS PIXEL
@@ -247,13 +489,13 @@ void configureMpx() {
 
 
   dev->write_register(LINK_REGISTER_W, temp);
-  cout << "is no frontend: " << LINK_REGISTER_W << " " << temp << endl;
+  cout << "is no frontend: LINK_REGISTER_W " << LINK_REGISTER_W << " " << temp << endl;
 
   // ----------------------------------------------------------------------
   // --  Do the configuration!
   // ----------------------------------------------------------------------
   temp = dev->read_register_rw(LINK_REGISTER_W);
-  dev->write_register(LINK_REGISTER_W,(0xFFFF0000|(temp&LINK_SHARED_MASK)));
+  dev->write_register(LINK_REGISTER_W, (0xFFFF0000|(temp&LINK_SHARED_MASK)));
   s0->configure_sensor(false, true);
   usleep(1000);
 
@@ -266,7 +508,6 @@ void configureMpx() {
   dev->write_register(LINK_REGISTER_W,temp);
   std::cout << "Configuring done." << std::endl;
 
-  // -- the problem here is that I still don't know whether this is turning ON of OFF a link
   // ** set_link_mask();
   linkMask();
 }
@@ -281,139 +522,6 @@ void readRegister(int reg) {
   cout << "rw register 0x" << hex << reg << ": " << dev->read_register_rw(reg) << endl;
 }
 
-
-// ----------------------------------------------------------------------
-/*
-void start_process_data() {
-    cout << "starting to process data"<<endl;
-    vector<uint32_t> * _event;
-
-    //initialize: _event is nullptr
-    uint32_t index = 65536;     //start cond
-    uint32_t eventsize = 65536;
-    vector<uint32_t> * data = nullptr;
-    uint32_t forever_counter = 0;
-    uint32_t pop_counter = 0;
-
-    forever {
-      forever_counter++;
-
-      //first go through or last interupt read
-      if (!(eventsize>index)) {
-	//if event was popped before, clear to free space on the readout worker buffer
-	if (_event!=nullptr)
-	  _event->clear();
-
-	//try to pop new data from readoutworker; dmablock
-	if (_dataIn->pop(_event)) {
-	  //reinitialize index for the new interupt
-	  index = 0;                      //success
-	  pop_counter++;
-
-	  //keep block counter up to date
-	  (*_blocks)--;
-	} else {
-	  continue;       //try again
-	}
-      }
-
-      //first cleanup, if for some reason garbage data should be produced or is still stuck somewhere on the FPGA
-      //drop the first 10 DMA interrupts
-      if (pop_counter<10) {
-	_event->clear();
-	index = 65536;      //reset
-	continue;
-      }
-
-      //the interupt has a defined lenght, if it is not meet alert the user and drop the event and pop a new one.
-      if(_event->size()!=65536 ) {
-	cout << "event size pd: " << _event->size() << endl;
-	_event->clear();
-	index = 65536;      //reset
-	continue;
-      }
-
-      //no data vector was created yet or none is existing right now
-      //search for first/next begin of event marker
-      while (data==nullptr
-	     && eventsize>index
-	     && _event->at(index)!= HIT_BLOCK_BEGIN_MARKER
-	     && _event->at(index)!= TRIGGER_BLOCK_BEGIN_MARKER
-	     && _event->at(index)!= TOT_BLOCK_BEGIN_MARKER) {
-	//ERROR("No beginning of event marker found after eoe: %d at %i ",_event->at(index), index);
-	index++;
-
-      }
-
-      // get memory for next event
-      if (data == nullptr) data = _eventbuffer.Get_Event_Memory();
-
-      //create data vector
-      while (eventsize>index
-	    && _event->at(index)!= HIT_BLOCK_END_MARKER
-	    && _event->at(index)!= TRIGGER_BLOCK_END_MARKER
-	    && _event->at(index)!= TOT_BLOCK_END_MARKER) {
-	data->push_back(_event->at(index));
-	index++;
-
-	//catch run stop
-	if (!running) {
-	  break;
-	}
-      }
-
-      // last element (could be out of bounce [index = 65536])
-      if (eventsize>index) {
-	//push_back end of event marker
-	data->push_back(_event->at(index));
-	index++;        //can now be [index = 65536]
-
-	//check data package, for block type
-	if (data->front() == HIT_BLOCK_BEGIN_MARKER && data->back()== HIT_BLOCK_END_MARKER) {
-	  //try to push the data and re-try until it is pushed --> !!possible forever loop
-	  while (!_dataOut->push(data)) {
-	    //catch run stop
-	    if (!running) {
-	      data->clear();
-	      break;
-	    }
-
-	    //cout<<"try to push data"<<endl;
-
-	    usleep(50*1000);
-	  }
-
-	  //in anycase reset the data pointer
-	  data = nullptr;
-	}
-	else if (data->front() == TRIGGER_BLOCK_BEGIN_MARKER && data->back() == TRIGGER_BLOCK_END_MARKER) {
-	  //extract single triggers and push to trigger queue
-	  cout << "fill_64_bit_trigger(data); --> DO SOMETHING!!!!!" << endl;
-	} else if (data->front() == TOT_BLOCK_BEGIN_MARKER && data->back() == TOT_BLOCK_END_MARKER)  {
-	  cout<< "old school ToTs not implemented. something is wrong you! you should not see this."<<endl;
-	} else {
-	  cout << "data vector has either the wrong structure or the block type was not recognized"<<endl;
-	  data->clear();
-	  data=nullptr;
-	}
-      }
-
-      //catch run stop forever
-      if (!running) {
-	data->clear();
-	_event->clear();
-	data=nullptr;
-	_event=nullptr;
-	emit send_info("[+]DataProcessor: Stopping...");
-	break;
-      }
-    }//END OF FOREVER
-
-    cout << "Processing stoped:" << endl;
-    emit process_status(false);
-}
-*/
-
 // ----------------------------------------------------------------------
 void startReadout(int nevent) {
   if (!dev->open()) {
@@ -421,18 +529,43 @@ void startReadout(int nevent) {
     return;
   }
 
-  dev->enable_continous_readout();
+  // -- empty queues
+  cout << "Empty queues" << endl;
+  uint64_t dummy;
+  vector<uint32_t> *d;
+  while (_triggerQueues.at(0)->pop(dummy))  {}
+  while (_totQueues.at(0)->pop(dummy)) {}
+  while (_hitQueues.at(0)->pop(d)) {
+    d->clear();
+  }
+  if (1) {
+    //add DDR3 reset
+    dev->set_reset_DDR3();
+    usleep(1);
+    dev->release_reset();
+  }
+
+
+
+  //  dev->enable_continous_readout();
 
   // ** start_readout() basically calls start_threads()
-  bool grayTS(gTS), grayTS2(gTS2);
-  bool sortedData(gSorted), fpgaHistos(false);
+  bool grayTS(false), grayTS2(false);
+  bool fpgaHistos(gHistos);
   dev->set_gray_decoding(grayTS, grayTS2);
-  dev->get_ready(false /*ddr3*/, sortedData, fpgaHistos, false, 0, 0);
+  dev->get_ready(gDDR3, false /*sorted*/, fpgaHistos, false, 0, 0);
+  if (fpgaHistos) dev->reset_histograms();
 
   dev->identify();
   dev->reset_ROMEMWRITER();
   dev->move_last_read();
   uint32_t ro_reg_temp;
+
+  // dev->set_reset_RO();
+  // dev->set_reset_DDR3();
+  // usleep(1);
+  // dev->release_reset();
+
 
   // ?? CW says so?
   dev->write_register_wait(0x5, 0x14, 50000);
@@ -440,110 +573,125 @@ void startReadout(int nevent) {
   ro_reg_temp = dev->read_register_rw(RO_MODE_REGISTER_W);
   cout << "ro_reg_temp = " << hex << ro_reg_temp << endl;
 
-  uint is_mp7 = (ro_reg_temp & (0x1 <<DUT_IS_MP7_OFFSET));//DUT_IS_MP7_OFFSET
-  cout << "is_mp7 = " << is_mp7 << endl;
+  uint is_mp7 = 0;
 
-  bool sorted(gSorted);
-  if (sorted) {
-    ro_reg_temp= (ro_reg_temp & 0XFFFFFFE0) | ((0x1 << RO_ENABLE_OFFSET) + ((0x3 & RO_MODE_MASK) << RO_MODE_OFFSET));
-  } else {
-    cout << hex << "RO_ENABLE_OFFSET = " << RO_ENABLE_OFFSET << endl;
-    cout << hex << "RO_MODE_MASK     = " << RO_MODE_MASK << endl;
-    cout << hex << "RO_MODE_OFFSET   = " << RO_MODE_OFFSET << endl;
-    cout << hex << "(ro_reg_temp & 0XFFFFFFE0)                = " << (ro_reg_temp & 0XFFFFFFE0) << endl;
-    cout << hex << "(0x1 << RO_ENABLE_OFFSET)                 = " << (0x1 << RO_ENABLE_OFFSET) << endl;
-    cout << hex << "(0x4 & RO_MODE_MASK)                      = " << (0x4 & RO_MODE_MASK) << endl;
-    cout << hex << "((0x4 & RO_MODE_MASK) << RO_MODE_OFFSET)) = " << ((0x4 & RO_MODE_MASK) << RO_MODE_OFFSET) << endl;
-    ro_reg_temp= (ro_reg_temp & 0XFFFFFFE0) |((0x1 << RO_ENABLE_OFFSET) + ((0x4 & RO_MODE_MASK) << RO_MODE_OFFSET));
-    cout << hex << "ro_reg_temp                               = " << ro_reg_temp << endl;
-  }
+  cout << hex << "RO_ENABLE_OFFSET = " << RO_ENABLE_OFFSET << endl;
+  cout << hex << "RO_MODE_MASK     = " << RO_MODE_MASK << endl;
+  cout << hex << "RO_MODE_OFFSET   = " << RO_MODE_OFFSET << endl;
+  cout << hex << "(ro_reg_temp & 0XFFFFFFE0)                = " << (ro_reg_temp & 0XFFFFFFE0) << endl;
+  cout << hex << "(0x1 << RO_ENABLE_OFFSET)                 = " << (0x1 << RO_ENABLE_OFFSET) << endl;
+  cout << hex << "(0x4 & RO_MODE_MASK)                      = " << (0x4 & RO_MODE_MASK) << endl;
+  cout << hex << "((0x4 & RO_MODE_MASK) << RO_MODE_OFFSET)) = " << ((0x4 & RO_MODE_MASK) << RO_MODE_OFFSET) << endl;
+  ro_reg_temp= (ro_reg_temp & 0XFFFFFFE0) |((0x1 << RO_ENABLE_OFFSET) + ((0x4 & RO_MODE_MASK) << RO_MODE_OFFSET));
+  cout << hex << "ro_reg_temp                               = " << ro_reg_temp << endl;
 
-  dev->write_register_wait(DMA_REGISTER_W, 0x0,1000);
+  dev->write_register_wait(DMA_REGISTER_W, 0x0, 1000);
 
-  dev->write_register(DMA_REGISTER_W, 0x1 |  (6000 << 8) );
-  dev->write_register(RO_MODE_REGISTER_W,ro_reg_temp);
+  // NB: 6000 = 0x1770
+  dev->write_register(DMA_REGISTER_W, 0x1 |  (6000 << 8) ); // = 0x177001
+  dev->write_register(DMA_REGISTER_W, 0x1 );
+  dev->write_register(RO_MODE_REGISTER_W, ro_reg_temp);
   usleep(1);
 
-  //??  dev->append_register(RO_MODE_REGISTER_W, is_mp7 , 0x1, DUT_IS_MP7_OFFSET); //DUT_IS_MP7_OFFSET
+  dev->append_register(RO_MODE_REGISTER_W, 0 /*is_mp7*/, 0x1, DUT_IS_MP7_OFFSET); //DUT_IS_MP7_OFFSET
 
   int block_type = 0;
 
   dev->print_registers();
-  cout << "Start data readout from FPGA " << endl;
 
-  Buffer < vector<uint32_t> >  ROBuffer = Buffer<vector<uint32_t> >(200000,4*1024);
-  ROBuffer.Count_Empty_Memory();
-  ROBuffer.Clear_Memory();
-  ROBuffer.Count_Empty_Memory();
-
-  vector<uint32_t> *event = nullptr;
-  event = ROBuffer.Get_Event_Memory();
-
-
-  int _hitblock       = dev->READ_SUCCESS_HITBLOCK;
-  int _triggerblock   = dev->READ_SUCCESS_TRIGGERBLOCK;
-  int _hitbusblock    = dev->READ_SUCCESS_HITBUSBLOCK;
-  int _dmablock       = dev->READ_DMA_BLOCK;
-
-  int readcounter = 0;
+  //??  dev->release_reset();
 
   // -------------------------------------
   // -- start reading data from the Device
   // -------------------------------------
-  int nDma(0), nHit(0), nTrg(0), nHitBus(0), nNoData(0), nError(0), nUnknown(0);
-  bool continueReading(true);
-  while (continueReading) {
-    readcounter++;
+  if (1) {
+    cout << "Start  readout from FPGA " << endl;
+    Buffer < vector<uint32_t> >  ROBuffer = Buffer<vector<uint32_t> >(200000,4*1024);
+    ROBuffer.Count_Empty_Memory();
+    ROBuffer.Clear_Memory();
+    ROBuffer.Count_Empty_Memory();
 
-    // read data
-    block_type = dev->read_block(*event);
-    if (block_type == _dmablock)   {
-      ++nDma;
-    } else if (block_type == _hitblock) {
-      ++nHit;
-    } else if( block_type == _triggerblock) {
-      ++nTrg;
-    } else if (block_type == _hitbusblock) {
-      ++nHitBus;
-    } else if (block_type== 1) {
-      ++nNoData;
-    } else if (block_type == 0) {
-      ++nError;
-    } else {
-      ++nUnknown;
-    }
-    event->clear();
-    if (nevent > 0) {
-      continueReading = (readcounter < nevent);
-    } else {
-      cout << dec << " DMA: " << nDma << " Trg: " << nTrg << "  Hitbus: " << nHitBus
-	   << " no data: " << nNoData << "   error: " << nError << " unknown: " << nDma
-	   << " size: " << event->size()
-	   << "\r" << flush;
-      if (readcounter%10000 == 0) {
-	if (kbhit()) {
-	  fflush(stdout);
-	  break;
+    vector<uint32_t> *event = nullptr;
+
+    int _hitblock       = dev->READ_SUCCESS_HITBLOCK;
+    int _triggerblock   = dev->READ_SUCCESS_TRIGGERBLOCK;
+    int _hitbusblock    = dev->READ_SUCCESS_HITBUSBLOCK;
+    int _dmablock       = dev->READ_DMA_BLOCK;
+
+    int readcounter = 0;
+
+    int nDma(0), nHit(0), nTrg(0), nHitBus(0), nNoData(0), nError(0), nUnknown(0);
+    bool continueReading(true);
+    while (continueReading) {
+      readcounter++;
+
+      uint32_t write_ptr = (dev->read_register_ro(DDR3_WR_ADDRESS_REGISTER_R)) & DDR3_WR_ADDRESS_MASK;
+      uint32_t read_ptr = (dev->read_register_ro(DDR3_RD_ADDRESS_REGISTER_R)) & DDR3_RD_ADDRESS_MASK;
+
+      uint32_t result = (write_ptr - read_ptr) & DDR3_RD_ADDRESS_MASK;
+      float float_res = result * 100.0 / DDR3_RD_ADDRESS_MASK;
+      cout << "write_ptr = " <<  write_ptr
+	   << " read_ptr = " <<  read_ptr
+	   << " result = " << result
+	   << " float_res = " << float_res
+	   << endl << endl;
+      if (event == nullptr) event = ROBuffer.Get_Event_Memory();
+
+      // read data
+      block_type = dev->read_block(*event);
+      if (block_type == _dmablock)   {
+	++nDma;
+      } else if (block_type == _hitblock) {
+	++nHit;
+      } else if( block_type == _triggerblock) {
+	++nTrg;
+      } else if (block_type == _hitbusblock) {
+	++nHitBus;
+      } else if (block_type== 1) {
+	++nNoData;
+      } else if (block_type == 0) {
+	++nError;
+      } else {
+	++nUnknown;
+      }
+      event->clear();
+      if (!gIsDma) {
+	cout << "DDR3 filling status: " << dev->get_DDR3_filling_status() << " " ;
+      }
+      if (nevent > 0) {
+	continueReading = (readcounter < nevent);
+      } else {
+	cout << dec << " DMA: " << nDma << " Trg: " << nTrg << "  Hitbus: " << nHitBus
+	     << " no data: " << nNoData << "   error: " << nError << " unknown: " << nUnknown
+	     << " size: " << event->size()
+	     << "\r" << flush;
+	if (readcounter%10000 == 0) {
+	  if (kbhit()) {
+	    fflush(stdout);
+	    break;
+	  }
 	}
       }
     }
+
+    ro_reg_temp = dev->read_register_rw(RO_MODE_REGISTER_W);
+    ro_reg_temp = ro_reg_temp & (~(0x1 << RO_ENABLE_OFFSET));
+    dev->write_register(RO_MODE_REGISTER_W,ro_reg_temp);
+    dev->write_register(DMA_REGISTER_W, 0x0);
+    dev->print_registers();
+
+
+    cout << endl;
+    cout << "RO Worker stopped" << dec << endl;
+    cout << "     DMA: " << nDma << endl;
+    cout << "     Trg: " << nTrg << endl;
+    cout << "  Hitbus: " << nHitBus << endl;
+    cout << " no data: " << nNoData << endl;
+    cout << "   error: " << nError << endl;
+    cout << " unknown: " << nUnknown << endl;
   }
 
-  ro_reg_temp = dev->read_register_rw(RO_MODE_REGISTER_W);
-  ro_reg_temp = ro_reg_temp & (~(0x1 << RO_ENABLE_OFFSET));
-  dev->write_register(RO_MODE_REGISTER_W,ro_reg_temp);
-  dev->write_register(DMA_REGISTER_W, 0x0);
-  dev->print_registers();
-
-
-  cout << endl;
-  cout << "RO Worker stopped" << dec << endl;
-  cout << "     DMA: " << nDma << endl;
-  cout << "     Trg: " << nTrg << endl;
-  cout << "  Hitbus: " << nHitBus << endl;
-  cout << " no data: " << nNoData << endl;
-  cout << "   error: " << nError << endl;
-  cout << " unknown: " << nDma << endl;
+  if (fpgaHistos) dev->readout_histograms(1, ".", false, true, 0);
 
 }
 
@@ -620,43 +768,6 @@ void modMemory() {
   dev->close();
 }
 
-
-// ----------------------------------------------------------------------
-void test_dma() {
-  if (!dev->open()) {
-    cout << "test_dma: no mudaq open" << endl;
-    return;
-  }
-  dev->enable_continous_readout();
-  dev->write_register(0x1,0x2);
-  Buffer < vector<uint32_t> > ROBuffer((Buffer<vector<uint32_t>>(10,65536)));
-  dev->write_register_wait(0x5,0x14,50000);
-  //    dev->write_register_wait(0x5,0x0,50000);
-  dev->enable_data_generator();
-  vector<uint32_t> *block = nullptr;
-  int testcounter = 0;
-
-  if (block == nullptr)
-    block = ROBuffer.Get_Event_Memory();
-
-  dev->write_register_wait(0x1,0x0,1000);
-  cout <<hex<< dev->read_register_rw(0x2)<<"\t"<< dev->read_register_rw(0x5)<<"\t"<<endl;
-
-  for (int i = 0; i< 100000;++i)  {
-    testcounter = dev->read_block(*block);
-    for(auto &b : * block)
-      cout << b<<endl;
-    block->clear();
-  }
-
-  dev->write_register_wait(0x5,0x0,50000);
-  cout <<testcounter<<endl;
-  dev->free_memory();
-  dev->disable();
-  //dev->close();
-  delete dev;
-}
-
 // ----------------------------------------------------------------------
 void inject(int what) {
   if (1 == what) {
@@ -678,94 +789,112 @@ void test0() {
 
 // ----------------------------------------------------------------------
 void runUI() {
-  string enter("");
-  gDMA = true;
-  gMask = true;
-  gSorted = false;
-  gTS = false;
-  gTS2 = false;
+  string enter(""), enterA("");
 
   int enter2(0);
   while (1) {
     cout << "----------------------------------------" << endl;
-    cout << "menu: " << endl;
-    cout << " q                  quit" << endl;
-    cout << " conf               configure chip" << endl;
-    cout << " inj [1|0]          injection [start|stop]" << endl;
-    cout << " reg REG            read ro/rw register REG" << endl;
-    cout << " printreg           print registers" << endl;
-    cout << " ro  [nevt|-1]      start readout" << endl;
-    cout << " test0        readout with various settings" << endl;
-    cout << " dma [1|0] mask [1|0] sorted [0|1] ts [0|1] ts2 [0|1] show" << endl;
     cout << "simpx>";
     cin >> enter;
 
     if ("q"  == enter) break;
 
+    if ("menu" == enter || "help" == enter) {
+      cout << " q                            quit" << endl;
+      cout << " areg val msk off old         play around  with append_register" << endl;
+      cout << " c | conf                     configure chip" << endl;
+      cout << " dac DACNAME VAL              set dac DACNAME to value VAL" << endl;
+      cout << " dac DACNAME                  read dac DACNAME value" << endl;
+      cout << " inj [1|0]                    injection [start|stop]" << endl;
+      cout << " m[em] [nwords|20] [offset|0] read read-only(?) memory for nwords with offset" << endl;
+      cout << " memrw nwords [offset|0]      read read-write memory for nwords with offset" << endl;
+      cout << " printreg                     print registers" << endl;
+      cout << " reg REG                      read ro/rw register REG" << endl;
+      cout << " ro  [nevt|-1]                start readout" << endl;
+      cout << " ddr3 [0|1]                   set various parameters" << endl;
+      cout << " test0                        readout with various settings" << endl;
+    }
+
+
     if ("test0"  == enter) test0();
 
-    if ("show" == enter) {
-      cout << " dma: " << (gDMA? "1":"0")
-	   << " mask: " << (gMask? "1":"0")
-	   << " sorted: " << (gSorted? "1":"0")
-	   << " ts: " << (gTS? "1":"0")
-	   << " ts2: " << (gTS2? "1":"0")
-	   << endl;
-    }
 
-    if ("dma" == enter) {
-      cin >> enter2;
-      cout << enter << " " << enter2 << " entered" <<endl;
-      if (1 == enter2) {
-	gDMA = true;
+    if ("m" == enter || "mem" == enter) {
+      char buffer[200];
+      cin.getline(buffer, 200, '\n');
+      string sbuffer(buffer);
+      cleanupString(sbuffer);
+      vector<string> lineItems = split(sbuffer, ' ');
+
+      cout << endl;
+      if (2 == lineItems.size()) {
+	uint32_t nwords = std::stoul(lineItems[0], nullptr, 16);
+	uint offset = std::stoul(lineItems[1], nullptr, 16);
+	mem(nwords, offset);
+      } else if (1 == lineItems.size()) {
+	uint32_t nwords = std::stoul(lineItems[0], nullptr, 16);
+	mem(nwords, 0);
       } else {
-	gDMA = false;
+	mem(20, 0);
       }
     }
 
-    if ("mask" == enter) {
-      cin >> enter2;
-      cout << enter << " " << enter2 << " entered" <<endl;
-      if (1 == enter2) {
-	gMask = true;
-      } else {
-	gMask = false;
-      }
-      linkMask();
-    }
+    if ("memrw" == enter) {
+      char buffer[200];
+      cin.getline(buffer, 200, '\n');
+      string sbuffer(buffer);
+      cleanupString(sbuffer);
+      vector<string> lineItems = split(sbuffer, ' ');
 
-    if ("sorted" == enter) {
-      cin >> enter2;
-      cout << enter << " " << enter2 << " entered" <<endl;
-      if (1 == enter2) {
-	gSorted = true;
+      cout << endl;
+      if (2 == lineItems.size()) {
+	uint32_t nwords = std::stoul(lineItems[0], nullptr, 16);
+	uint offset = std::stoul(lineItems[1], nullptr, 16);
+	memrw(nwords, offset);
       } else {
-	gSorted = false;
+	uint32_t nwords = std::stoul(lineItems[0], nullptr, 16);
+	memrw(nwords, 0);
       }
     }
 
-    if ("ts" == enter) {
-      cin >> enter2;
-      cout << enter << " " << enter2 << " entered" <<endl;
-      if (1 == enter2) {
-	gTS = true;
-      } else {
-	gTS = false;
-      }
-    }
+    if ("areg"  == enter) {
+      char buffer[200];
+      cin.getline(buffer, 200, '\n');
+      string sbuffer(buffer);
+      cleanupString(sbuffer);
+      vector<string> lineItems = split(sbuffer, ' ');
 
-    if ("ts2" == enter) {
-      cin >> enter2;
-      cout << enter << " " << enter2 << " entered" <<endl;
-      if (1 == enter2) {
-	gTS2 = true;
-      } else {
-	gTS2 = false;
+      cout << enter << " entered: lineItems = ";
+      for (auto &b : lineItems) {
+	cout << b << ",";
+      }
+      cout << endl;
+      if (4 == lineItems.size()) {
+	uint ival = std::stoi(lineItems[0], 0, 16);
+	uint imsk = std::stoi(lineItems[1], 0, 16);
+	uint offs = std::stoi(lineItems[2], 0, 16);
+	uint oldv = std::stoi(lineItems[3], 0, 16);
+	pr_append_register(ival, imsk, offs, oldv);
       }
     }
 
 
-    if ("conf"  == enter) {
+    if ("dac" == enter) {
+      char buffer[200];
+      cin.getline(buffer, 200, '\n');
+      string sbuffer(buffer);
+      cleanupString(sbuffer);
+      vector<string> lineItems = split(sbuffer, ' ');
+
+      cout << endl;
+      if (2 == lineItems.size()) {
+	setDAC(lineItems[0], lineItems[1]);
+      } else {
+	readDAC(lineItems[0]);
+      }
+    }
+
+    if ("c" == enter || "conf"  == enter) {
       cout << enter << " entered" <<endl;
       configureMpx();
     }
@@ -793,31 +922,85 @@ void runUI() {
       cout << enter << " " << enter2 << " entered" <<endl;
       startReadout(enter2);
     }
+
+    if ("ddr3"  == enter) {
+      cin >> enter2;
+      cout << enter << " " << enter2 << " entered" <<endl;
+      if (1 == enter2) {
+	gDDR3 = true;
+      } else {
+	gDDR3 = false;
+      }
+    }
+
+    if ("histos"  == enter) {
+      cin >> enter2;
+      cout << enter << " " << enter2 << " entered" <<endl;
+      if (1 == enter2) {
+	gHistos = true;
+      } else {
+	gHistos = false;
+      }
+    }
+
   }
 
   if (dev) dev->close();
 }
 
+
 // ----------------------------------------------------------------------
 int main(int argc, char *argv[]) {
+
+  gHistos = gDDR3 = false;
+
+  // -- command line arguments
+  int mode(0), dmaMode(1);
+  for (int i = 0; i < argc; i++){
+    if (!strcmp(argv[i],"-h")) {
+        cout << "List of arguments:" << endl;
+	cout << " without argument you get the interactive prompt" << endl;
+        cout << "-m 1          test memory (canned version)" << endl;
+        cout << "-m 2          test registers" << endl;
+        cout << "-m 4          write/read to memory" << endl;
+        cout << "-h            prints this message and exits" << endl;
+        return 0;
+    }
+    if (!strcmp(argv[i],"-dma")) {dmaMode    = atoi(argv[++i]); }     // dmaMode
+    if (!strcmp(argv[i],"-m"))   {mode       = atoi(argv[++i]); }     // mode
+  }
 
   // ----------------------------------------------------------------------
   // -- mudaq
   // ----------------------------------------------------------------------
-  dev = new DmaMudaqDevice("/dev/mudaq0");
-  if (!dev->open()) {
-    cout << "cannot open DmaMudaqDevice" << endl;
-    return 0;
+  if (1 == dmaMode) {
+    dev = new DmaMudaqDevice("/dev/mudaq0");
+    if (!dev->open()) {
+      cout << "cannot open DmaMudaqDevice" << endl;
+      return 0;
+    }
+  } else {
+    dev = new PollingMudaqDevice("/dev/mudaq0");
+    if (!dev->open()) {
+      cout << "cannot open PollingMudaqDevice" << endl;
+      return 0;
+    }
   }
+  // dev->reset_ROMEMWRITER();
+  // dev->move_last_read();
+  // dev->set_reset_RO();
+  // dev->set_reset_DDR3();
 
-  if (!dev->init_dma()) {
+  devDma =  dynamic_cast<DmaMudaqDevice*>(dev);
+  gIsDma = (nullptr != devDma);
+
+  if (gIsDma && !devDma->init_dma()) {
     cout << "cannot init DmaMudaqDevice" << endl;
     return 0;
   }
 
   dev->identify();
   dev->zero_wrmem();
-  dev->reset_slow_control_memory();
 
 
   // -- setup of global variables
@@ -833,35 +1016,16 @@ int main(int argc, char *argv[]) {
   wordqueue_64bit *totqueue = new wordqueue_64bit();
   _totQueues.push_back(totqueue);
 
-  // -- command line arguments
-  int mode(0);
-  for (int i = 0; i < argc; i++){
-    if (!strcmp(argv[i],"-h")) {
-        cout << "List of arguments:" << endl;
-	cout << " without argument you get the interactive prompt" << endl;
-        cout << "-m 1          test memory (canned version)" << endl;
-        cout << "-m 2          test registers" << endl;
-        cout << "-m 3          test dma (canned version)" << endl;
-        cout << "-m 4          write/read to memory" << endl;
-        cout << "-h            prints this message and exits" << endl;
-        return 0;
-    }
-    if (!strcmp(argv[i],"-m"))  {mode       = atoi(argv[++i]); }     // mode
-  }
 
   if (0 == mode)  {
     runUI();
   } else if (1 == mode) {
     cout << "test memory (canned version)" << endl;
     test_memory();
-  } else if (3 == mode) {
-    cout << "test dma (canned version)" << endl;
-    test_dma();
   } else if (4 == mode) {
     cout << "modify memory" << endl;
     modMemory();
   }
-
 
 
   return 0;
