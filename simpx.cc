@@ -127,6 +127,7 @@ bool bothAreSpaces(char lhs, char rhs) {
 
 // ----------------------------------------------------------------------
 void cleanupString(string &s) {
+  if (0 == s.size()) return;
   replaceAll(s, "\t", " ");
   string::size_type s1 = s.find("#");
   if (string::npos != s1) s.erase(s1);
@@ -181,6 +182,9 @@ int kbhit() {
 
 bool gDDR3, gHistos;
 bool gIsDma;
+
+int gInjCol, gInjRow;
+int gHBCol, gHBRow;
 
 // -- chip configuration
 mudaq::MupixSensor *s0(0);
@@ -356,10 +360,42 @@ void linkMask() {
 
 // ----------------------------------------------------------------------
 void configureMpx() {
-  if (!dev->open()) {
-    cout << "no mudaq open" << endl;
-    return;
+  // --  Do the configuration!
+  s0->set_board_dacs(*(boarddacs_config.at(0)));
+  s0->set_chip_dacs(*(chipdacs_config.at(0)));
+  //  s0->set_pixel_dacs(*(_tdacs.at(i)));
+
+  uint32_t temp;
+
+  temp = dev->read_register_rw(LINK_REGISTER_W);
+  dev->write_register(LINK_REGISTER_W, (0xFFFF0000|(temp&LINK_SHARED_MASK)));
+  s0->configure_sensor(false, true);
+  usleep(1000);
+
+  uint32_t configuring = dev->read_register_ro(SLOW_CONTROL_FPGA_1_REGISTER_R);
+  while ((configuring  & 0x1) == 0) {
+    configuring = dev->read_register_ro(SLOW_CONTROL_FPGA_1_REGISTER_R) & 0x1;
+    sleep(1);
+    cout << "configuring......" << endl;
   }
+  dev->write_register(LINK_REGISTER_W,temp);
+  std::cout << "Configuring done." << std::endl;
+
+  // ** set_link_mask();
+  linkMask();
+}
+
+
+// ----------------------------------------------------------------------
+void hitbus(int col, int row) {
+  PixAddr pix_hb = PixAddr(col, row);
+
+  s0->set_hitbus_pixel(pix_hb);
+
+}
+
+// ----------------------------------------------------------------------
+void setupMpx() {
   dev->write_register_wait(0x2, 0x101, 50000);
   dev->write_register_wait(0x5, 0x14, 50000);
 
@@ -455,15 +491,12 @@ void configureMpx() {
 
   temp = dev->read_register_rw(LINK_REGISTER_W);
   dev->write_register(LINK_REGISTER_W,(0xFFFF0000|(temp&LINK_SHARED_MASK)));
-  std::cout << "is no frontend: LINK_REGISTER_W " << LINK_REGISTER_W << " " << (0xFFFF0000|(temp&LINK_SHARED_MASK)) << " " << temp << std::endl;
 
   // -- SetChipDACs
-  // HITBUS PIXEL
-  PixAddr pix_hb = PixAddr(20, 0);
   // INJECTION PIXEL
-  PixAddr pix_inj = PixAddr(20, 0);
+  PixAddr pix_inj = PixAddr(gInjCol, gInjRow);
   // AMPOUT ROW
-  uint32_t row_ampout = 20;
+  uint32_t row_ampout = 0;
   // ????????
   uint8_t ColRegVal = 0;
   s0->update_ColRegVal(ColRegVal);
@@ -473,44 +506,17 @@ void configureMpx() {
   s0->clear_inj_vecs();
   s0->clear_pixel_mask();
 
-  s0->set_hitbus_pixel(pix_hb);
+  hitbus(gHBCol, gHBRow);
+
   s0->set_injection_pixel(pix_inj);
   s0->set_analog_buffer_row(row_ampout);
 
-  s0->add_col_to_inj_vec(20);
-  s0->add_row_to_inj_vec(0);
+  s0->add_col_to_inj_vec(gInjCol);
+  s0->add_row_to_inj_vec(gInjRow);
 
-
-  std::cout << s0->get_sensor_type_name() << std::endl;
-
-  s0->set_board_dacs(*(boarddacs_config.at(0)));
-  s0->set_chip_dacs(*(chipdacs_config.at(0)));
-  //  s0->set_pixel_dacs(*(_tdacs.at(i)));
-
-
-  dev->write_register(LINK_REGISTER_W, temp);
-  cout << "is no frontend: LINK_REGISTER_W " << LINK_REGISTER_W << " " << temp << endl;
-
-  // ----------------------------------------------------------------------
-  // --  Do the configuration!
-  // ----------------------------------------------------------------------
-  temp = dev->read_register_rw(LINK_REGISTER_W);
-  dev->write_register(LINK_REGISTER_W, (0xFFFF0000|(temp&LINK_SHARED_MASK)));
-  s0->configure_sensor(false, true);
-  usleep(1000);
-
-  uint32_t configuring = dev->read_register_ro(SLOW_CONTROL_FPGA_1_REGISTER_R);
-  while ((configuring  & 0x1) == 0) {
-    configuring = dev->read_register_ro(SLOW_CONTROL_FPGA_1_REGISTER_R) & 0x1;
-    sleep(1);
-    cout << "configuring......" << endl;
-  }
-  dev->write_register(LINK_REGISTER_W,temp);
-  std::cout << "Configuring done." << std::endl;
-
-  // ** set_link_mask();
-  linkMask();
+  configureMpx();
 }
+
 
 // ----------------------------------------------------------------------
 void readRegister(int reg) {
@@ -802,6 +808,7 @@ void runUI() {
     if ("menu" == enter || "help" == enter) {
       cout << " q                            quit" << endl;
       cout << " areg val msk off old         play around  with append_register" << endl;
+      cout << " s | setup                    setup chip" << endl;
       cout << " c | conf                     configure chip" << endl;
       cout << " dac DACNAME VAL              set dac DACNAME to value VAL" << endl;
       cout << " dac DACNAME                  read dac DACNAME value" << endl;
@@ -819,6 +826,7 @@ void runUI() {
     if ("test0"  == enter) test0();
 
 
+    // ----------------------------------------------------------------------
     if ("m" == enter || "mem" == enter) {
       char buffer[200];
       cin.getline(buffer, 200, '\n');
@@ -837,8 +845,10 @@ void runUI() {
       } else {
 	mem(20, 0);
       }
+      continue;
     }
 
+    // ----------------------------------------------------------------------
     if ("memrw" == enter) {
       char buffer[200];
       cin.getline(buffer, 200, '\n');
@@ -855,8 +865,10 @@ void runUI() {
 	uint32_t nwords = std::stoul(lineItems[0], nullptr, 16);
 	memrw(nwords, 0);
       }
+      continue;
     }
 
+    // ----------------------------------------------------------------------
     if ("areg"  == enter) {
       char buffer[200];
       cin.getline(buffer, 200, '\n');
@@ -864,7 +876,7 @@ void runUI() {
       cleanupString(sbuffer);
       vector<string> lineItems = split(sbuffer, ' ');
 
-      cout << enter << " entered: lineItems = ";
+      cout << hex << enter << " entered: lineItems = ";
       for (auto &b : lineItems) {
 	cout << b << ",";
       }
@@ -876,9 +888,10 @@ void runUI() {
 	uint oldv = std::stoi(lineItems[3], 0, 16);
 	pr_append_register(ival, imsk, offs, oldv);
       }
+      continue;
     }
 
-
+    // ----------------------------------------------------------------------
     if ("dac" == enter) {
       char buffer[200];
       cin.getline(buffer, 200, '\n');
@@ -892,47 +905,125 @@ void runUI() {
       } else {
 	readDAC(lineItems[0]);
       }
+      continue;
     }
 
+    // ----------------------------------------------------------------------
     if ("c" == enter || "conf"  == enter) {
       cout << enter << " entered" <<endl;
       configureMpx();
+      continue;
     }
 
-    if ("inj"  == enter) {
-      cin >> enter2;
-      cout << enter << " " << enter2 << " entered" <<endl;
-      inject(enter2);
+    // ----------------------------------------------------------------------
+    if ("s" == enter || "setup"  == enter) {
+      cout << enter << " entered" <<endl;
+      setupMpx();
+      continue;
     }
 
+    // ----------------------------------------------------------------------
+    if ("hb" == enter) {
+      char buffer[200];
+      cin.getline(buffer, 200, '\n');
+      string sbuffer(buffer);
+      cleanupString(sbuffer);
+      vector<string> lineItems = split(sbuffer, ' ');
+
+      cout << endl;
+      if ("pix" == lineItems[0]) {
+	if (3 == lineItems.size()) {
+	  int icol = std::stoi(lineItems[1], 0, 10);
+	  int irow = std::stoi(lineItems[2], 0, 10);
+	  cout << dec << "calling hitbus(" << icol << ", " << irow << ")" << endl;
+	  gHBCol = icol;
+	  gHBRow = irow;
+	  hitbus(icol, irow);
+	} else if (2 == lineItems.size()) {
+	  int icol = std::stoi(lineItems[1], 0, 10);
+	  int irow = 0;
+	  cout << dec << "calling hitbus(" << icol << ", " << irow << ")" << endl;
+	  gHBCol = icol;
+	  gHBRow = irow;
+	  hitbus(icol, irow);
+	}
+      } else {
+	cout << "hitbus pixel address " << dec << gHBCol << ", " << gHBRow << endl;
+	continue;
+      }
+      continue;
+    }
+
+
+    // ----------------------------------------------------------------------
+    if ("i" == enter || "inj"  == enter) {
+      char buffer[200];
+      cin.getline(buffer, 200, '\n');
+      string sbuffer(buffer);
+      vector<string> lineItems;
+      cleanupString(sbuffer);
+      if (sbuffer.size() > 0) {
+	lineItems = split(sbuffer, ' ');
+      } else {
+	cout << "injection pixel address " << dec << gInjCol << ", " << gInjRow << endl;
+	continue;
+      }
+
+      if ("0" == lineItems[0]) {
+	cout << "stop injection" << endl;
+	inject(0);
+      } else if ("1" == lineItems[0]) {
+	cout << "start injection" << endl;
+	inject(1);
+      } else if ("clear" == lineItems[0]) {
+	cout << "clear injection vectors" << endl;
+	s0->clear_inj_vecs();
+      } else if ("pix" == lineItems[0]) {
+	int icol = std::stoi(lineItems[1], 0, 10);
+	int irow = std::stoi(lineItems[2], 0, 10);
+	cout << "setting pixel address for injection " << dec << icol << ", " << irow << ")" << endl;
+	gInjCol = icol;
+	gInjRow = irow;
+      }
+      continue;
+    }
+
+    // ----------------------------------------------------------------------
     if ("reg"  == enter) {
       cin >> enter2;
-      cout << enter << " " << enter2 << " entered" <<endl;
+      cout << hex << enter << " " << enter2 << " entered" <<endl;
       readRegister(enter2);
+      continue;
     }
 
 
+    // ----------------------------------------------------------------------
     if ("printreg"  == enter) {
-      cout << enter << " entered" <<endl;
+      cout<< hex  << enter << " entered" <<endl;
       dev->print_registers();
+      continue;
     }
 
     if ("ro"  == enter) {
       cin >> enter2;
-      cout << enter << " " << enter2 << " entered" <<endl;
+      cout << hex << enter << " " << enter2 << " entered" <<endl;
       startReadout(enter2);
+      continue;
     }
 
+    // ----------------------------------------------------------------------
     if ("ddr3"  == enter) {
       cin >> enter2;
-      cout << enter << " " << enter2 << " entered" <<endl;
+      cout << hex << enter << " " << enter2 << " entered" <<endl;
       if (1 == enter2) {
 	gDDR3 = true;
       } else {
 	gDDR3 = false;
       }
+      continue;
     }
 
+    // ----------------------------------------------------------------------
     if ("histos"  == enter) {
       cin >> enter2;
       cout << enter << " " << enter2 << " entered" <<endl;
@@ -941,6 +1032,7 @@ void runUI() {
       } else {
 	gHistos = false;
       }
+      continue;
     }
 
   }
@@ -953,6 +1045,8 @@ void runUI() {
 int main(int argc, char *argv[]) {
 
   gHistos = gDDR3 = false;
+  gInjCol = gHBCol = 110;
+  gInjRow = gHBRow = 0;
 
   // -- command line arguments
   int mode(0), dmaMode(1);
@@ -986,6 +1080,7 @@ int main(int argc, char *argv[]) {
       return 0;
     }
   }
+
   // dev->reset_ROMEMWRITER();
   // dev->move_last_read();
   // dev->set_reset_RO();
@@ -1016,6 +1111,7 @@ int main(int argc, char *argv[]) {
   wordqueue_64bit *totqueue = new wordqueue_64bit();
   _totQueues.push_back(totqueue);
 
+  setupMpx();
 
   if (0 == mode)  {
     runUI();
