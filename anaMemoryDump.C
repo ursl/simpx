@@ -12,9 +12,13 @@ void plot1(string filename = "MemoryDump-noinject.root") {
   c1->Divide(2,2);
 
   c1->cd(1);
+  gPad->SetLogy(1);
+  ((TH1D*)gDirectory->Get("hcol"))->SetMinimum(0.5);
   ((TH1D*)gDirectory->Get("hcol"))->Draw();
 
   c1->cd(2);
+  gPad->SetLogy(1);
+  ((TH1D*)gDirectory->Get("hrow"))->SetMinimum(0.5);
   ((TH1D*)gDirectory->Get("hrow"))->Draw();
 
   c1->cd(3);
@@ -33,4 +37,16 @@ void plot1(string filename = "MemoryDump-noinject.root") {
 void makeAll() {
   plot1("MemoryDump-noinject.root");
   plot1("MemoryDump-inject.root");
+}
+
+// ----------------------------------------------------------------------
+void makeThLow() {
+  plot1("MemoryDump-inject-thlow-4d.root");
+  plot1("MemoryDump-inject-thlow-4e.root");
+  plot1("MemoryDump-inject-thlow-4f.root");
+  plot1("MemoryDump-inject-thlow-5a.root");
+  plot1("MemoryDump-inject-thlow-5f.root");
+  plot1("MemoryDump-inject-thlow-67.root");
+  plot1("MemoryDump-inject-thlow-68.root");
+  plot1("MemoryDump-inject-thlow-69.root");
 }
