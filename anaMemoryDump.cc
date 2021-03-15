@@ -100,13 +100,17 @@ void txt2tree(string filename, bool createTree) {
 	tro.push_back(rowords[icnt]);
 	++icnt;
 	++rolength;
-	if (rolength > 20) break;
+	if (rolength > 20) {
+	  cout << "long event at roword = " << icnt << hex << " hex = " << icnt << endl;
+	  break;
+	}
       }
-      if (rolength < 19) {
+      if (rolength > 7 && rolength < 21) {
 	tro.push_back(rowords[icnt]);
 	vro.push_back(tro);
       } else {
-	break;
+	tro.clear();
+	cout << "corrupt event at roword = " << icnt << hex << " hex = " << icnt << endl;
       }
     }
     ++icnt;
@@ -114,6 +118,7 @@ void txt2tree(string filename, bool createTree) {
 
   // -- fill tree
   bool print = !createTree;
+  //print = true;
   for (unsigned int i = 0; i < vro.size(); ++i) {
     if (print) cout << hex << setw(6) << i;
     for (unsigned int j = 0; j < vro[i].size(); ++j) {
@@ -123,18 +128,23 @@ void txt2tree(string filename, bool createTree) {
       gHbCnt = gTS = gNhit = gRow =  gCol = gQ = gT = 0;
 
       gHbCnt = vro[i][1];
-      gTS    = vro[i][3]; // skip first part of TS
+      gTS    = vro[i][5]; // skip first part of TS
       gNhit  = (vro[i].size() - 7 )/2;
-      gRow   = (vro[i][6] & 0x0000ff00) >> 8;
-      gCol   = vro[i][6] & 0x000000ff;
-      gQ     = vro[i][7] & 0x0000f600 >> 10;
-      gT     = vro[i][7] & 0x000003ff;
-      gTree->Fill();
 
-      ((TH1D*)gDirectory->Get("hrow"))->Fill(gRow);
-      ((TH1D*)gDirectory->Get("hcol"))->Fill(gCol);
-      ((TH2D*)gDirectory->Get("hmap"))->Fill(gCol, gRow);
+      if (print) cout << "gNhit = " << gNhit << " vro[" << i << "].size() = " << vro[i].size() << endl;
+      // -- accomodate multihit readouts
+      for (int ihit = 0; ihit < gNhit; ++ihit) {
+	if (print) cout << "gRow[" << 6+2*ihit << "] = " << gNhit << endl;
+	gRow   = (vro[i][6+2*ihit] & 0x0000ff00) >> 8;
+	gCol   = vro[i][6+2*ihit] & 0x000000ff;
+	gQ     = vro[i][7+2*ihit] & 0x0000f600 >> 10;
+	gT     = vro[i][7+2*ihit] & 0x000003ff;
+	gTree->Fill();
 
+	((TH1D*)gDirectory->Get("hrow"))->Fill(gRow);
+	((TH1D*)gDirectory->Get("hcol"))->Fill(gCol);
+	((TH2D*)gDirectory->Get("hmap"))->Fill(gCol, gRow);
+      }
     }
     if (print) cout << endl;
   }
