@@ -4,3 +4,6 @@ SET( CMAKE_EXE_LINKER_FLAGS  "-Wl,--no-as-needed")
 
 add_executable(simpx simpx.cc)
 target_link_libraries(simpx libtelescope)
+
+add_executable(anaMemoryDump anaMemoryDump.cc)
+target_link_libraries(anaMemoryDump libtelescope)
