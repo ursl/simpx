@@ -119,6 +119,7 @@ void txt2tree(string filename, bool createTree) {
   // -- fill tree
   bool print = !createTree;
   //print = true;
+  int oldT(0), oldTS(0);
   for (unsigned int i = 0; i < vro.size(); ++i) {
     if (print) cout << hex << setw(6) << i;
     for (unsigned int j = 0; j < vro[i].size(); ++j) {
@@ -135,15 +136,27 @@ void txt2tree(string filename, bool createTree) {
       // -- accomodate multihit readouts
       for (int ihit = 0; ihit < gNhit; ++ihit) {
 	if (print) cout << "gRow[" << 6+2*ihit << "] = " << gNhit << endl;
-	gRow   = (vro[i][6+2*ihit] & 0x0000ff00) >> 8;
-	gCol   = vro[i][6+2*ihit] & 0x000000ff;
-	gQ     = vro[i][7+2*ihit] & 0x0000f600 >> 10;
-	gT     = vro[i][7+2*ihit] & 0x000003ff;
+	gRow   = (vro[i][6+2*ihit] & 0x0000ff80) >> 7;
+	gCol   = (vro[i][6+2*ihit] & 0x0000007f);
+	gQ     = (vro[i][7+2*ihit] & 0x0000f600) >> 10;
+	gT     = (vro[i][7+2*ihit] & 0x000003ff);
 	gTree->Fill();
 
 	((TH1D*)gDirectory->Get("hrow"))->Fill(gRow);
 	((TH1D*)gDirectory->Get("hcol"))->Fill(gCol);
 	((TH2D*)gDirectory->Get("hmap"))->Fill(gCol, gRow);
+
+	if (55 == gCol) {
+	  ((TH1D*)gDirectory->Get("hqcol55"))->Fill(gQ);
+
+	  if (i > 0) {
+	    ((TH1D*)gDirectory->Get("hdtscol55"))->Fill(gTS - oldTS);
+	    oldTS = gTS;
+	    ((TH1D*)gDirectory->Get("hdtcol55"))->Fill(gT - oldT);
+	    oldT = gT;
+	  }
+
+	}
       }
     }
     if (print) cout << endl;
@@ -188,8 +201,11 @@ int main(int argc, char *argv[]) {
     gTree->Branch("t",      &gT,       "t/i");
 
     TH1D *hcol = new TH1D("hcol", Form("col %s", rootfilename.c_str()), 256, 0., 256.); hcol->SetStats(111111);
-    TH1D *hrow = new TH1D("hrow", Form("row %s", rootfilename.c_str()), 250, 0., 250.); hrow->SetStats(111111);
+    TH1D *hrow = new TH1D("hrow", Form("row %s", rootfilename.c_str()), 500, 0., 500.); hrow->SetStats(111111);
     TH2D *hmap = new TH2D("hmap", Form("map %s", rootfilename.c_str()), 256, 0., 256., 250, 0., 250.); hmap->SetStats(111111);
+    TH1D *hqcol55 = new TH1D("hqcol55", Form("charge col55 %s", rootfilename.c_str()), 256, 0., 256.);
+    TH1D *hdtcol55 = new TH1D("hdtcol55", Form("delta(t) col55 %s", rootfilename.c_str()), 1000, 0., 20000.);
+    TH1D *hdtscol55 = new TH1D("hdtscol55", Form("delta(ts) col55 %s", rootfilename.c_str()), 1000, 0., 1000000);
   }
 
   if (string::npos == filename.find("nada")) {

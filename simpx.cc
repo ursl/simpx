@@ -183,6 +183,7 @@ int kbhit() {
 bool gDDR3, gHistos;
 bool gIsDma;
 
+int gInjMilliVolt, gInjFreq;
 int gInjCol, gInjRow;
 int gHBCol, gHBRow;
 
@@ -777,8 +778,8 @@ void modMemory() {
 // ----------------------------------------------------------------------
 void inject(int what) {
   if (1 == what) {
-    uint16_t voltage = volt_to_14bit_reg(0.8*1000);
-    s0->set_injection(voltage, 1 /*duration*/, 60000 /*frequency*/, 100 /*counts*/);
+    uint16_t voltage = volt_to_14bit_reg(gInjMilliVolt);
+    s0->set_injection(voltage, 1 /*duration*/, gInjFreq /*frequency*/, 100 /*counts*/);
     // s0->set_injection_pixel(PixAddr(20, 0));
     s0->inject_forever();
   } else {
@@ -814,6 +815,7 @@ void runUI() {
       cout << " dac DACNAME                  read dac DACNAME value" << endl;
       cout << " inj [1|0]                    injection [start|stop]" << endl;
       cout << " m[em] [nwords|20] [offset|0] read read-only(?) memory for nwords with offset" << endl;
+      cout << " z                            zero memory" << endl;
       cout << " memrw nwords [offset|0]      read read-write memory for nwords with offset" << endl;
       cout << " printreg                     print registers" << endl;
       cout << " reg REG                      read ro/rw register REG" << endl;
@@ -824,6 +826,16 @@ void runUI() {
 
 
     if ("test0"  == enter) test0();
+
+
+    // ----------------------------------------------------------------------
+    if ("z" == enter) {
+      cout << enter << " entered: zero wr memory" << endl;
+      dev->zero_wrmem();
+      dev->reset_FPGA_RO();
+      dev->reset_DDR3_memory();
+    }
+
 
 
     // ----------------------------------------------------------------------
@@ -978,6 +990,14 @@ void runUI() {
       } else if ("clear" == lineItems[0]) {
 	cout << "clear injection vectors" << endl;
 	s0->clear_inj_vecs();
+      } else if ("f" == lineItems[0]) {
+	int ifr = std::stoi(lineItems[1], 0, 10);
+	gInjFreq = ifr;
+	cout << dec << "set injection frequency " << gInjFreq << "Hz" << endl;
+      } else if ("v" == lineItems[0]) {
+	int imv = std::stoi(lineItems[1], 0, 10);
+	gInjMilliVolt = imv;
+	cout << dec << "set injection voltage " << gInjMilliVolt << "mV" << endl;
       } else if ("pix" == lineItems[0]) {
 	int icol = std::stoi(lineItems[1], 0, 10);
 	int irow = std::stoi(lineItems[2], 0, 10);
@@ -1045,8 +1065,10 @@ void runUI() {
 int main(int argc, char *argv[]) {
 
   gHistos = gDDR3 = false;
-  gInjCol = gHBCol = 110;
+  gInjCol = gHBCol = 0;
   gInjRow = gHBRow = 0;
+  gInjMilliVolt = 800;
+  gInjFreq = 60000;
 
   // -- command line arguments
   int mode(0), dmaMode(1);
