@@ -897,7 +897,6 @@ void inject(int what) {
 // ----------------------------------------------------------------------
 void prog1() {
   uint32_t nwords(100);
-  int icol(10);
   string filename("");
   ofstream logfile;
   logfile.open("prog1.log", ios::out|ios::trunc);
@@ -908,50 +907,63 @@ void prog1() {
   TH2D *hcol = new TH2D("hcol", "hcol", 128, 0., 128, 128, 0., 128.);
   TH2D *hrow = new TH2D("hrow", "hrow", 512, 0., 512, 512, 0., 512.);
 
-  for (int irow = 0; irow < 260; ++irow) {
-    // -- is done in setupMpx as well:
-    //s0->clear_inj_vecs();
+  vector<int> cols;
+  cols.push_back(0);
+  cols.push_back(1);
+  cols.push_back(2);
+  cols.push_back(10);
+  cols.push_back(50);
+  cols.push_back(100);
+  cols.push_back(200);
+  cols.push_back(250);
+  cols.push_back(255);
 
-    cout << "setting pixel address for injection (" << dec << icol << ", " << irow << ")" << endl;
-    icol = irow%20;
-    gInjCol = icol;
-    gInjRow = irow;
+  for (unsigned int icol = 0; icol < cols.size(); ++icol) {
+    for (int irow = 0; irow < 500; ++irow) {
+      // -- is done in setupMpx as well:
+      //s0->clear_inj_vecs();
 
-    cout << "setupMpx()" << endl;
-    setupMpx();
-    sleep(2);
+      cout << "setting pixel address for injection (" << dec << icol << ", " << irow << ")" << endl;
+      //      icol = irow%20;
+      gInjCol = icol;
+      gInjRow = irow;
 
-    // -- modified this in config/dacs/mp10_default.json
-    // cout << "setDAC(ThLow, 5a)" << endl;
-    // setDAC("ThLow", "5a");
-    // sleep(2);
+      cout << "setupMpx()" << endl;
+      setupMpx();
+      sleep(2);
 
-    filename = Form("MemoryDump-C%d-R%d.txt", icol, irow);
+      // -- modified this in config/dacs/mp10_default.json
+      // cout << "setDAC(ThLow, 5a)" << endl;
+      // setDAC("ThLow", "5a");
+      // sleep(2);
 
-    cout << "start injection" << endl;
-    inject(1);
-    // -- wait long enough(?) to fill memory with new data
-    sleep(10);
+      filename = Form("MemoryDump-C%d-R%d.txt", icol, irow);
 
-    mem(nwords, 0, filename);
+      cout << "start injection" << endl;
+      inject(1);
+      // -- wait long enough(?) to fill memory with new data
+      sleep(10);
 
-    cout << "parse file to vector" << endl;
-    txt2vect(filename);
+      mem(nwords, 0, filename);
 
-    // -- simple analysis
-    logfile << filename << endl;
-    for (unsigned int ievt = 0; ievt < eVector.size(); ++ievt) {
-      logfile << dec  << filename << " evt " << ievt << " ";
-      for (unsigned int ihit = 0; ihit < eVector[ievt].nhit; ++ihit) {
-	logfile  << "  hit " << ihit << " col: " << eVector[ievt].col[ihit] << " row:" << eVector[ievt].row[ihit] << " ";
-	hmap->Fill(eVector[ievt].col[ihit], eVector[ievt].row[ihit]);
-	hcol->Fill(icol, eVector[ievt].col[ihit]);
-	hrow->Fill(irow, eVector[ievt].row[ihit]);
+      cout << "parse file to vector" << endl;
+      txt2vect(filename);
+
+      // -- simple analysis
+      logfile << filename << endl;
+      for (unsigned int ievt = 0; ievt < eVector.size(); ++ievt) {
+	logfile << dec  << filename << " evt " << ievt << " ";
+	for (unsigned int ihit = 0; ihit < eVector[ievt].nhit; ++ihit) {
+	  logfile  << "  hit " << ihit << " col: " << eVector[ievt].col[ihit] << " row:" << eVector[ievt].row[ihit] << " ";
+	  hmap->Fill(eVector[ievt].col[ihit], eVector[ievt].row[ihit]);
+	  hcol->Fill(icol, eVector[ievt].col[ihit]);
+	  hrow->Fill(irow, eVector[ievt].row[ihit]);
+	}
+	logfile << endl;
       }
-      logfile << endl;
-    }
-    inject(0);
+      inject(0);
 
+    }
   }
 
   f->Write();
