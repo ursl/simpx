@@ -19,12 +19,26 @@
 
 #include "../library/utils.hpp"
 
+#include <TFile.h>
+#include <TH1D.h>
+#include <TH2D.h>
+
 using namespace std;
 using namespace mudaq;
 
 
 typedef boost::lockfree::spsc_queue<std::vector<uint32_t>*, boost::lockfree::capacity<65536*4> > longvectorqueue;
 typedef boost::lockfree::spsc_queue<uint64_t, boost::lockfree::capacity<65536> > wordqueue_64bit;
+
+
+struct event {
+  int ts, hbcnt;
+  int nhit;
+  vector<int> col, row;
+  vector<int> q, t;
+};
+
+vector<event> eVector;
 
 // ----------------------------------------------------------------------
 //
@@ -233,7 +247,94 @@ void setDAC(string dac, string val) {
 
 
 // ----------------------------------------------------------------------
-void mem(uint32_t nwords, uint32_t offset) {
+void txt2vect(string filename) {
+
+  eVector.clear();
+
+  ifstream INS;
+  string sline;
+  INS.open(filename);
+  vector<uint32_t> rowords;
+  rowords.reserve(75000);
+  while (getline(INS, sline)) {
+    // -- remove leading address and colon + whitespaces
+    sline = sline.substr(sline.find(":")+4);
+    // -- split into words
+    cleanupString(sline);
+    vector<string> lineItems = split(sline, ' ');
+    for (unsigned int i = 0; i < lineItems.size(); ++i) {
+      uint32_t word = std::stoul(lineItems[i], nullptr, 16);
+      rowords.push_back(word);
+    }
+  }
+  INS.close();
+
+  // -- create vector containing vectors of read-out words
+  vector<vector<uint32_t> > vro;
+  int icnt(0);
+  while (icnt < rowords.size()) {
+    // -- search for new hitblock:
+    if (0xfabeabba == rowords[icnt]) {
+      // cout << "new hitblock found: icnt = " << icnt << endl;
+      vector<uint32_t> tro;
+      tro.push_back(rowords[icnt]);
+      ++icnt;
+      int rolength(1);
+      while (0xbeefbeef != rowords[icnt]) {
+	tro.push_back(rowords[icnt]);
+	++icnt;
+	++rolength;
+	if (rolength > 20) {
+	  cout << "long event at roword = " << icnt << hex << " hex = " << icnt << endl;
+	  break;
+	}
+      }
+      if (rolength > 7 && rolength < 21) {
+	tro.push_back(rowords[icnt]);
+	vro.push_back(tro);
+      } else {
+	tro.clear();
+	cout << "corrupt event at roword = " << icnt << hex << " hex = " << icnt << endl;
+      }
+    }
+    ++icnt;
+  }
+
+  // -- fill vector
+  bool print = false;
+  //  print = true;
+  int oldT(0), oldTS(0);
+  for (unsigned int i = 0; i < vro.size(); ++i) {
+
+    event a;
+
+    a.hbcnt = vro[i][1];
+    a.ts    = vro[i][5]; // skip first part of TS
+    a.nhit  = (vro[i].size() - 7 )/2;
+
+    // -- accomodate multihit readouts
+    for (int ihit = 0; ihit < a.nhit; ++ihit) {
+      if (print) cout << "gRow[" << 6+2*ihit << "] = " << a.nhit << endl;
+      a.row.push_back(((vro[i][6+2*ihit] & 0x0000ff80) >> 7));
+      a.col.push_back((vro[i][6+2*ihit] & 0x0000007f));
+      a.q.push_back(((vro[i][7+2*ihit] & 0x0000f600) >> 10));
+      a.t.push_back((vro[i][7+2*ihit] & 0x000003ff));
+    }
+
+    eVector.push_back(a);
+
+  }
+}
+
+
+// ----------------------------------------------------------------------
+void anavect() {
+
+}
+
+
+// ----------------------------------------------------------------------
+void mem(uint32_t nwords, uint32_t offset, string outputfilename) {
   int istart(offset);
   uint32_t last_written = (dev->read_register_ro(MEM_ADDRESS_REGISTER_R)>>EOE_ADDRESS_OFFSET) & EOE_ADDRESS_MASK;
   uint32_t write_ptr = (dev->read_register_ro(DDR3_WR_ADDRESS_REGISTER_R)) & DDR3_WR_ADDRESS_MASK;
@@ -241,13 +342,16 @@ void mem(uint32_t nwords, uint32_t offset) {
 
   uint32_t ntot(nwords);
   ofstream file;
-  if (nwords == 0) {
-    ntot = MUDAQ_MEM_RO_LEN;
-    cout << "open file to write " << ntot << " words" << endl;
-    file.open("MemoryDump.txt",ios::out|ios::trunc);
+  bool toFile(false);
+
+  if (outputfilename != "") {
+    toFile = true;
+    //??    ntot = MUDAQ_MEM_RO_LEN;
+    cout << dec << "open file ->" << outputfilename << "<- to write " << ntot << " words" << endl;
+    file.open(outputfilename.c_str(), ios::out|ios::trunc);
   }
 
-  if (nwords == 0) {
+  if (toFile) {
     cout << hex
 	 << "rr_ro(DDR3_WR_ADDRESS_REGISTER_R): " << write_ptr
 	 << " rr_ro(DDR3_RD_ADDRESS_REGISTER_R): " << read_ptr
@@ -275,26 +379,27 @@ void mem(uint32_t nwords, uint32_t offset) {
 	 << endl;
   }
   for (int i = istart; i < istart+ntot; i = i+10) {
-    if (nwords == 0) {
+    if (toFile) {
       file << hex << setw(4) << i << ": ";
     } else {
       cout << hex << setw(4) << i << ": ";
     }
     for (int j = i; j < i+10; ++j) {
-      if (nwords == 0) {
+      if (toFile) {
 	file << setw(10) << dev->read_memory(j& MUDAQ_MEM_RO_MASK) ;
       } else {
 	cout << setw(10) << dev->read_memory(j& MUDAQ_MEM_RO_MASK) ;
       }
     }
-    if (nwords == 0) {
+    if (toFile) {
       file << endl;
     } else {
       cout << endl;
     }
   }
-  if (nwords == 0) file.close();
-
+  if (toFile) {
+    file.close();
+  }
 }
 
 // ----------------------------------------------------------------------
@@ -389,6 +494,7 @@ void configureMpx() {
 
 // ----------------------------------------------------------------------
 void hitbus(int col, int row) {
+  cout << dec << "called hitbus(" << col << ", " << row << ")" << endl;
   PixAddr pix_hb = PixAddr(col, row);
 
   s0->set_hitbus_pixel(pix_hb);
@@ -788,8 +894,70 @@ void inject(int what) {
 }
 
 
-void test0() {
+// ----------------------------------------------------------------------
+void prog1() {
+  uint32_t nwords(100);
+  int icol(10);
+  string filename("");
+  ofstream logfile;
+  logfile.open("prog1.log", ios::out|ios::trunc);
 
+
+  TFile *f = TFile::Open("prog1.root", "RECREATE");
+  TH2D *hmap = new TH2D("hmap", "hmap", 128, 0., 128, 512, 0., 512.);
+  TH2D *hcol = new TH2D("hcol", "hcol", 128, 0., 128, 128, 0., 128.);
+  TH2D *hrow = new TH2D("hrow", "hrow", 512, 0., 512, 512, 0., 512.);
+
+  for (int irow = 0; irow < 260; ++irow) {
+    // -- is done in setupMpx as well:
+    //s0->clear_inj_vecs();
+
+    cout << "setting pixel address for injection (" << dec << icol << ", " << irow << ")" << endl;
+    icol = irow%20;
+    gInjCol = icol;
+    gInjRow = irow;
+
+    cout << "setupMpx()" << endl;
+    setupMpx();
+    sleep(2);
+
+    // -- modified this in config/dacs/mp10_default.json
+    // cout << "setDAC(ThLow, 5a)" << endl;
+    // setDAC("ThLow", "5a");
+    // sleep(2);
+
+    filename = Form("MemoryDump-C%d-R%d.txt", icol, irow);
+
+    cout << "start injection" << endl;
+    inject(1);
+    // -- wait long enough(?) to fill memory with new data
+    sleep(10);
+
+    mem(nwords, 0, filename);
+
+    cout << "parse file to vector" << endl;
+    txt2vect(filename);
+
+    // -- simple analysis
+    logfile << filename << endl;
+    for (unsigned int ievt = 0; ievt < eVector.size(); ++ievt) {
+      logfile << dec  << filename << " evt " << ievt << " ";
+      for (unsigned int ihit = 0; ihit < eVector[ievt].nhit; ++ihit) {
+	logfile  << "  hit " << ihit << " col: " << eVector[ievt].col[ihit] << " row:" << eVector[ievt].row[ihit] << " ";
+	hmap->Fill(eVector[ievt].col[ihit], eVector[ievt].row[ihit]);
+	hcol->Fill(icol, eVector[ievt].col[ihit]);
+	hrow->Fill(irow, eVector[ievt].row[ihit]);
+      }
+      logfile << endl;
+    }
+    inject(0);
+
+  }
+
+  f->Write();
+  f->Close();
+
+  logfile.close();
 }
 
 
@@ -813,19 +981,19 @@ void runUI() {
       cout << " c | conf                     configure chip" << endl;
       cout << " dac DACNAME VAL              set dac DACNAME to value VAL" << endl;
       cout << " dac DACNAME                  read dac DACNAME value" << endl;
-      cout << " inj [1|0]                    injection [start|stop]" << endl;
+      cout << " inj [pix icol irow] [1|0]    injection [start|stop]" << endl;
+      cout << " hb [icol|irow]               hitbus [icol|irow]" << endl;
       cout << " m[em] [nwords|20] [offset|0] read read-only(?) memory for nwords with offset" << endl;
       cout << " z                            zero memory" << endl;
       cout << " memrw nwords [offset|0]      read read-write memory for nwords with offset" << endl;
       cout << " printreg                     print registers" << endl;
+      cout << " prog1                        program 1" << endl;
       cout << " reg REG                      read ro/rw register REG" << endl;
       cout << " ro  [nevt|-1]                start readout" << endl;
       cout << " ddr3 [0|1]                   set various parameters" << endl;
-      cout << " test0                        readout with various settings" << endl;
     }
 
 
-    if ("test0"  == enter) test0();
 
 
     // ----------------------------------------------------------------------
@@ -834,6 +1002,12 @@ void runUI() {
       dev->zero_wrmem();
       dev->reset_FPGA_RO();
       dev->reset_DDR3_memory();
+    }
+
+    // ----------------------------------------------------------------------
+    if ("prog1" == enter) {
+      cout << enter << " entered: run prog1 (testing col/row indices returned)" << endl;
+      prog1();
     }
 
 
@@ -850,12 +1024,12 @@ void runUI() {
       if (2 == lineItems.size()) {
 	uint32_t nwords = std::stoul(lineItems[0], nullptr, 16);
 	uint offset = std::stoul(lineItems[1], nullptr, 16);
-	mem(nwords, offset);
+	mem(nwords, offset, "MemoryDump.txt");
       } else if (1 == lineItems.size()) {
 	uint32_t nwords = std::stoul(lineItems[0], nullptr, 16);
-	mem(nwords, 0);
+	mem(nwords, 0, "MemoryDump.txt");
       } else {
-	mem(20, 0);
+	mem(20, 0, "");
       }
       continue;
     }
@@ -1001,7 +1175,7 @@ void runUI() {
       } else if ("pix" == lineItems[0]) {
 	int icol = std::stoi(lineItems[1], 0, 10);
 	int irow = std::stoi(lineItems[2], 0, 10);
-	cout << "setting pixel address for injection " << dec << icol << ", " << irow << ")" << endl;
+	cout << "setting pixel address for injection (" << dec << icol << ", " << irow << ")" << endl;
 	gInjCol = icol;
 	gInjRow = irow;
       }
@@ -1065,10 +1239,10 @@ void runUI() {
 int main(int argc, char *argv[]) {
 
   gHistos = gDDR3 = false;
-  gInjCol = gHBCol = 0;
+  gInjCol = gHBCol = 20;
   gInjRow = gHBRow = 0;
-  gInjMilliVolt = 800;
-  gInjFreq = 60000;
+  gInjMilliVolt = 900;
+  gInjFreq = 6000;
 
   // -- command line arguments
   int mode(0), dmaMode(1);
