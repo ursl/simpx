@@ -1253,7 +1253,7 @@ int main(int argc, char *argv[]) {
   gHistos = gDDR3 = false;
   gInjCol = gHBCol = 20;
   gInjRow = gHBRow = 0;
-  gInjMilliVolt = 900;
+  gInjMilliVolt = 600;
   gInjFreq = 6000;
 
   // -- command line arguments
