@@ -923,10 +923,10 @@ void prog1() {
       // -- is done in setupMpx as well:
       //s0->clear_inj_vecs();
 
-      cout << "setting pixel address for injection (" << dec << icol << ", " << irow << ")" << endl;
       //      icol = irow%20;
-      gInjCol = icol;
+      gInjCol = cols[icol];
       gInjRow = irow;
+      cout << "setting pixel address for injection (" << dec << gInjCol << ", " << gInjRow << ")" << endl;
 
       cout << "setupMpx()" << endl;
       setupMpx();
@@ -937,7 +937,7 @@ void prog1() {
       // setDAC("ThLow", "5a");
       // sleep(2);
 
-      filename = Form("MemoryDump-C%d-R%d.txt", icol, irow);
+      filename = Form("MemoryDump-C%d-R%d.txt", gInjCol, gInjRow);
 
       cout << "start injection" << endl;
       inject(1);
@@ -956,8 +956,8 @@ void prog1() {
 	for (unsigned int ihit = 0; ihit < eVector[ievt].nhit; ++ihit) {
 	  logfile  << "  hit " << ihit << " col: " << eVector[ievt].col[ihit] << " row:" << eVector[ievt].row[ihit] << " ";
 	  hmap->Fill(eVector[ievt].col[ihit], eVector[ievt].row[ihit]);
-	  hcol->Fill(icol, eVector[ievt].col[ihit]);
-	  hrow->Fill(irow, eVector[ievt].row[ihit]);
+	  hcol->Fill(gInjCol, eVector[ievt].col[ihit]);
+	  hrow->Fill(gInjRow, eVector[ievt].row[ihit]);
 	}
 	logfile << endl;
       }
