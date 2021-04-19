@@ -315,8 +315,19 @@ void txt2vect(string filename) {
     // -- accomodate multihit readouts
     for (int ihit = 0; ihit < a.nhit; ++ihit) {
       if (print) cout << "gRow[" << 6+2*ihit << "] = " << a.nhit << endl;
-      a.row.push_back(((vro[i][6+2*ihit] & 0x0000ff80) >> 7));
-      a.col.push_back((vro[i][6+2*ihit] & 0x0000007f));
+      uint32_t raw = vro[i][6+2*ihit];
+      if (1) {
+	// this is from telescope_frame.hpp.
+	// Note: the MSB of the higher COL nibble is the MSB of the ROW, not the LSB!
+	gRow = (0xFF & (raw >> ROW_OFFSET));
+	gCol = (0xFF & (raw >> COL_OFFSET));
+	gRow = gRow + ((0x80 & gCol)<<1);
+	gCol = (0x7F & gCol);
+      }
+
+      transform_col_row_MPX(col, row);
+      a.row.push_back(row);
+      a.col.push_back(col);
       a.q.push_back(((vro[i][7+2*ihit] & 0x0000f600) >> 10));
       a.t.push_back((vro[i][7+2*ihit] & 0x000003ff));
     }

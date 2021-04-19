@@ -13,6 +13,9 @@
 #include <TH1D.h>
 #include <TCanvas.h>
 
+#include "../library/utils.hpp"
+#include "../library/mudaq_constants.hpp"
+
 using namespace std;
 
 
@@ -136,8 +139,24 @@ void txt2tree(string filename, bool createTree) {
       // -- accomodate multihit readouts
       for (int ihit = 0; ihit < gNhit; ++ihit) {
 	if (print) cout << "gRow[" << 6+2*ihit << "] = " << gNhit << endl;
-	gRow   = (vro[i][6+2*ihit] & 0x0000ff80) >> 7;
-	gCol   = (vro[i][6+2*ihit] & 0x0000007f);
+	// gCol   = ( & 0x0000007f);
+	// gRow   = (vro[i][6+2*ihit] & 0x0000ff80) >> 7;
+
+	uint32_t raw = vro[i][6+2*ihit];
+
+	if (1) {
+	  // this is from telescope_frame.hpp.
+	  // Note: the MSB of the higher COL nibble is the MSB of the ROW, not the LSB!
+	  gRow = (0xFF & (raw >> ROW_OFFSET));
+	  gCol = (0xFF & (raw >> COL_OFFSET));
+	  gRow = gRow + ((0x80 & gCol)<<1);
+	  gCol = (0x7F & gCol);
+	}
+
+	transform_col_row_MPX(gCol, gRow);
+
+	if (1) cout << dec << "col/row = " << gCol << "/" << gRow << endl;
+
 	gQ     = (vro[i][7+2*ihit] & 0x0000f600) >> 10;
 	gT     = (vro[i][7+2*ihit] & 0x000003ff);
 	gTree->Fill();
