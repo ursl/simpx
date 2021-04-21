@@ -36,6 +36,7 @@ struct event {
   int nhit;
   vector<int> col, row;
   vector<int> q, t;
+  vector<int> tot, gs, tag;
 };
 
 vector<event> eVector;
@@ -247,6 +248,9 @@ void setDAC(string dac, string val) {
 
 
 // ----------------------------------------------------------------------
+// I keep it this way to allow also an offline analysis
+// (and to keep a file trail of the measurements)
+// ----------------------------------------------------------------------
 void txt2vect(string filename) {
 
   eVector.clear();
@@ -313,35 +317,44 @@ void txt2vect(string filename) {
     a.nhit  = (vro[i].size() - 7 )/2;
 
     // -- accomodate multihit readouts
-    uint32_t col(0), row(0);
+    uint32_t col(0), row(0), tot(0), graystamp(0), tag(0);
     for (int ihit = 0; ihit < a.nhit; ++ihit) {
       if (print) cout << "gRow[" << 6+2*ihit << "] = " << a.nhit << endl;
-      uint32_t raw = vro[i][6+2*ihit];
+      uint32_t raw    = vro[i][6+2*ihit];
+      uint32_t hittot = vro[i][7+2*ihit];
+
       if (1) {
+	// conversion from digital row/col indices to physical row/col indices
 	// this is from telescope_frame.hpp.
 	// Note: the MSB of the higher COL nibble is the MSB of the ROW, not the LSB!
 	row = (0xFF & (raw >> ROW_OFFSET));
 	col = (0xFF & (raw >> COL_OFFSET));
 	row = row + ((0x80 & col)<<1);
 	col = (0x7F & col);
+
+	tag = (0xFF & (raw >> TAG_OFFSET));
+
+
+	tot = (0xFF & hittot),
+	tot = tot&MP10_TS2_RANGE;
+
+	graystamp = (0x3FF & (raw >> TS_OFFSET));
+	graystamp += (((0x20&tot)>>5)<<10);
       }
 
       transform_col_row_MPX(col, row);
       a.row.push_back(row);
       a.col.push_back(col);
-      a.q.push_back(((vro[i][7+2*ihit] & 0x0000f600) >> 10));
-      a.t.push_back((vro[i][7+2*ihit] & 0x000003ff));
+
+      a.tot.push_back(tot);
+      a.gs.push_back(graystamp);
+      a.gs.push_back(tag);
+
+      a.q.push_back(((vro[i][7+2*ihit] & 0x0000f600) >> 10)); //?? useless??
+      a.t.push_back((vro[i][7+2*ihit] & 0x000003ff));         //?? useless??
     }
-
     eVector.push_back(a);
-
   }
-}
-
-
-// ----------------------------------------------------------------------
-void anavect() {
-
 }
 
 
@@ -505,6 +518,8 @@ void configureMpx() {
 
 
 // ----------------------------------------------------------------------
+// -- according to Mu3e-Note-0052-MuPix10_Documentation.pdf only the
+//    hitbus puts out all pixels in a specific col (row ignored?)
 void hitbus(int col, int row) {
   cout << dec << "called hitbus(" << col << ", " << row << ")" << endl;
   PixAddr pix_hb = PixAddr(col, row);
@@ -570,8 +585,8 @@ void setupMpx() {
   // -- read config
   std::string repoPath = getenv("MUPIX8DAQ");
   SensorConfig conf("mupix9","#3",*s0);
-  cout << "reading configs from " << (repoPath + "/config/dacs/mp10_default.json") << endl;
-  conf.read_config(repoPath + "/config/dacs/mp10_default.json");
+  cout << "reading configs from " << (repoPath + "/simpx/mp10_default.json") << endl;
+  conf.read_config(repoPath + "/simpx/mp10_default.json");
   mudaq::ChipDacsConfig dacs = conf.get_dacs();
   for (auto &dac_vec: dacs) {
     for (auto &d : dac_vec) {
@@ -907,35 +922,39 @@ void inject(int what) {
 
 
 // ----------------------------------------------------------------------
-void prog1() {
+// colrow: iterate over a fixed vector with columns and scan a fixed
+//         pattern of rows.  Histogram the readout col/row indices vs
+//         the programmed col/row indices.
+//         Notes:
+//         (1) the read out indices are converted in txt2vect from
+//             digital addresses to physical addresses
+//         (2) the detour via txt file is intentional to allow offline
+//             analysis with anaMemoryDump.cc
+// ----------------------------------------------------------------------
+void colrow() {
   uint32_t nwords(100);
   string filename("");
   ofstream logfile;
-  logfile.open("prog1.log", ios::out|ios::trunc);
+  logfile.open("colrow.log", ios::out|ios::trunc);
 
 
-  TFile *f = TFile::Open("prog1.root", "RECREATE");
-  TH2D *hmap = new TH2D("hmap", "hmap", 128, 0., 128, 512, 0., 512.);
-  TH2D *hcol = new TH2D("hcol", "hcol", 128, 0., 128, 128, 0., 128.);
-  TH2D *hrow = new TH2D("hrow", "hrow", 512, 0., 512, 512, 0., 512.);
+  TFile *f = TFile::Open("colrow.root", "RECREATE");
+  TH2D *hmap = new TH2D("hmap", "hmap", 256, 0., 256., 256, 0., 256.);
+  TH2D *hcol = new TH2D("hcol", "hcol", 256, 0., 256., 256, 0., 256.);
+  TH2D *hrow = new TH2D("hrow", "hrow", 256, 0., 256., 256, 0., 256.);
 
   vector<int> cols;
   cols.push_back(0);
   cols.push_back(1);
   cols.push_back(2);
-  cols.push_back(10);
-  cols.push_back(50);
-  cols.push_back(100);
-  cols.push_back(200);
+  cols.push_back(249);
   cols.push_back(250);
+  cols.push_back(251);
+  cols.push_back(254);
   cols.push_back(255);
 
   for (unsigned int icol = 0; icol < cols.size(); ++icol) {
-    for (int irow = 0; irow < 500; ++irow) {
-      // -- is done in setupMpx as well:
-      //s0->clear_inj_vecs();
-
-      //      icol = irow%20;
+    for (int irow = 0; irow < 256; irow += 15) {
       gInjCol = cols[icol];
       gInjRow = irow;
       cout << "setting pixel address for injection (" << dec << gInjCol << ", " << gInjRow << ")" << endl;
@@ -944,12 +963,7 @@ void prog1() {
       setupMpx();
       sleep(2);
 
-      // -- modified this in config/dacs/mp10_default.json
-      // cout << "setDAC(ThLow, 5a)" << endl;
-      // setDAC("ThLow", "5a");
-      // sleep(2);
-
-      filename = Form("MemoryDump-C%d-R%d.txt", gInjCol, gInjRow);
+      filename = Form("colrow-MemoryDump-C%d-R%d.txt", gInjCol, gInjRow);
 
       cout << "start injection" << endl;
       inject(1);
@@ -985,10 +999,106 @@ void prog1() {
 }
 
 
+// ----------------------------------------------------------------------
+// scanInjV: scan injection voltage from vmin to vmax in steps of vstep
+//           and plot it.
+//           pixel inject and mask configuration is done beforehand!
+// ----------------------------------------------------------------------
+void scanInjV(string swhat = "test", int vmin = 300, int vmax = 900, int vstep = 50) {
+  uint32_t nwords(5000);
+  string filename("");
+  ofstream logfile;
+  logfile.open(Form("scan-%s.log", swhat.c_str()), ios::out|ios::trunc);
+
+  TH1D *hq = new TH1D("hq", "hq", 500, 0., 500.);
+  TH1D *htot = new TH1D("htot", "htot", 500, 0., 500.);
+
+  TFile *f = TFile::Open(Form("scan-%s.root", swhat.c_str()), "RECREATE");
+  TH1D *h1 = new TH1D(Form("h1"), Form("h1: Q vs InjV (%s)", swhat.c_str()), 100, 0., 2000.);
+  TH1D *h2 = new TH1D(Form("h2"), Form("h2: TOT vs InjV (%s)", swhat.c_str()), 100, 0., 2000.);
+
+  for (int iv = vmin; iv <= vmax; iv += vstep) {
+
+    inject(0);
+    sleep(1);
+    gInjMilliVolt = iv;
+
+    cout << dec << "setupMpx() for gInjMilliVolt = " << gInjMilliVolt << endl;
+    logfile << dec << "setupMpx() for gInjMilliVolt = " << gInjMilliVolt << endl;
+    setupMpx();
+    sleep(2);
+
+    filename = Form("scanInjV-%s-MemoryDump-v%d.txt", swhat.c_str(), gInjMilliVolt);
+
+    cout << "start injection" << endl;
+    inject(1);
+    // -- wait long enough(?) to fill memory with new data
+    sleep(10);
+
+    mem(nwords, 0, filename);
+
+    cout << "parse file to vector" << endl;
+    txt2vect(filename);
+
+    // -- simple analysis
+    logfile << filename << endl;
+    double qinj(0.), tot(0.);
+    int nhits(0), nwrongHits(0);
+    hq->Reset();
+    htot->Reset();
+    for (unsigned int ievt = 0; ievt < eVector.size(); ++ievt) {
+      for (unsigned int ihit = 0; ihit < eVector[ievt].nhit; ++ihit) {
+	// -- take also neighboring hits
+	if (TMath::Abs(gInjCol - eVector[ievt].col[ihit]) < 2 && TMath::Abs(gInjRow - eVector[ievt].row[ihit]) < 2) {
+	  ++nhits;
+	  hq->Fill(eVector[ievt].q[ihit]);
+	  htot->Fill(eVector[ievt].tot[ihit]);
+	  logfile << dec  << filename << " evt " << ievt << " "
+		  << "  hit " << ihit << "(nhit: " << eVector[ievt].nhit << ")"
+		  << " col: " << eVector[ievt].col[ihit] << " row: " << eVector[ievt].row[ihit]
+		  << " q: " << eVector[ievt].q[ihit]
+		  << " tot: " << eVector[ievt].tot[ihit]
+		  << endl;
+	} else {
+	  ++nwrongHits;
+	}
+      }
+    }
+    logfile << "hits: " << nhits << " and " <<  nwrongHits << " wrong hits. "
+	    << " <q> = " << hq->GetMean() << " +/- " << hq->GetMeanError()
+	    << " <tot> = " << htot->GetMean() << " +/- " << htot->GetMeanError()
+	    << endl;
+    h1->SetBinContent(h1->FindBin(gInjMilliVolt), hq->GetMean());
+    h1->SetBinError(h1->FindBin(gInjMilliVolt), hq->GetMeanError());
+
+    h2->SetBinContent(h2->FindBin(gInjMilliVolt), htot->GetMean());
+    h2->SetBinError(h2->FindBin(gInjMilliVolt), htot->GetMeanError());
+
+    inject(0);
+
+  }
+
+  // --set injection voltage to safe(?) value
+  gInjMilliVolt = 400;
+  setupMpx();
+  inject(1);
+  sleep(1);
+  inject(0);
+
+  f->Write();
+  f->Close();
+
+  logfile.close();
+}
+
+
 
 // ----------------------------------------------------------------------
 void runUI() {
   string enter(""), enterA("");
+
+  ofstream LOG;
+  LOG.open("simpxui.log", ios::app);
 
   int enter2(0);
   while (1) {
@@ -996,9 +1106,13 @@ void runUI() {
     cout << "simpx>";
     cin >> enter;
 
-    if ("q"  == enter) break;
+    if ("q"  == enter) {
+      LOG << enter << endl;
+      break;
+    }
 
     if ("menu" == enter || "help" == enter) {
+      LOG << enter << endl;
       cout << " q                            quit" << endl;
       cout << " areg val msk off old         play around  with append_register" << endl;
       cout << " s | setup                    setup chip" << endl;
@@ -1011,7 +1125,8 @@ void runUI() {
       cout << " z                            zero memory" << endl;
       cout << " memrw nwords [offset|0]      read read-write memory for nwords with offset" << endl;
       cout << " printreg                     print registers" << endl;
-      cout << " prog1                        program 1" << endl;
+      cout << " colrow                       testing column/row decoding" << endl;
+      cout << " scaninjv vmin vmax vstep bla scan inj voltage (mV) from vmin to vmax with stepsize vstep (string mod bla)" << endl;
       cout << " reg REG                      read ro/rw register REG" << endl;
       cout << " ro  [nevt|-1]                start readout" << endl;
       cout << " ddr3 [0|1]                   set various parameters" << endl;
@@ -1022,6 +1137,7 @@ void runUI() {
 
     // ----------------------------------------------------------------------
     if ("z" == enter) {
+      LOG << enter << endl;
       cout << enter << " entered: zero wr memory" << endl;
       dev->zero_wrmem();
       dev->reset_FPGA_RO();
@@ -1029,9 +1145,39 @@ void runUI() {
     }
 
     // ----------------------------------------------------------------------
-    if ("prog1" == enter) {
-      cout << enter << " entered: run prog1 (testing col/row indices returned)" << endl;
-      prog1();
+    if ("colrow" == enter) {
+      LOG << enter << endl;
+      cout << enter << " entered: run colrow (testing col/row decoding)" << endl;
+      colrow();
+    }
+
+    // ----------------------------------------------------------------------
+    if ("scaninjv" == enter) {
+      cout << enter << " entered: scaninjv" << endl;
+      int vini(0), vend(0), vstep(0);
+      string swhat("");
+
+      char buffer[200];
+      cin.getline(buffer, 200, '\n');
+      LOG << enter << buffer << endl;
+      string sbuffer(buffer);
+      cleanupString(sbuffer);
+      vector<string> lineItems = split(sbuffer, ' ');
+
+      cout << endl;
+
+      if (4 == lineItems.size()) {
+	vini  = std::stoul(lineItems[0], nullptr, 10);
+	vend  = std::stoul(lineItems[1], nullptr, 10);
+	vstep = std::stoul(lineItems[2], nullptr, 10);
+	swhat = lineItems[3];
+      } else {
+	cout << "incorrect number of arguments. Correct usage:" << endl;
+	cout << " scaninjv vmin vmax vstep bla scan inj voltage (mV) from vmin to vmax with stepsize vstep (string mod bla)" << endl;
+	continue;
+      }
+
+      scanInjV(swhat, vini, vend, vstep);
     }
 
 
@@ -1040,6 +1186,7 @@ void runUI() {
     if ("m" == enter || "mem" == enter) {
       char buffer[200];
       cin.getline(buffer, 200, '\n');
+      LOG << enter << buffer << endl;
       string sbuffer(buffer);
       cleanupString(sbuffer);
       vector<string> lineItems = split(sbuffer, ' ');
@@ -1062,6 +1209,7 @@ void runUI() {
     if ("memrw" == enter) {
       char buffer[200];
       cin.getline(buffer, 200, '\n');
+      LOG << enter << buffer << endl;
       string sbuffer(buffer);
       cleanupString(sbuffer);
       vector<string> lineItems = split(sbuffer, ' ');
@@ -1082,6 +1230,7 @@ void runUI() {
     if ("areg"  == enter) {
       char buffer[200];
       cin.getline(buffer, 200, '\n');
+      LOG << enter << buffer << endl;
       string sbuffer(buffer);
       cleanupString(sbuffer);
       vector<string> lineItems = split(sbuffer, ' ');
@@ -1105,6 +1254,7 @@ void runUI() {
     if ("dac" == enter) {
       char buffer[200];
       cin.getline(buffer, 200, '\n');
+      LOG << enter << buffer << endl;
       string sbuffer(buffer);
       cleanupString(sbuffer);
       vector<string> lineItems = split(sbuffer, ' ');
@@ -1136,6 +1286,7 @@ void runUI() {
     if ("hb" == enter) {
       char buffer[200];
       cin.getline(buffer, 200, '\n');
+      LOG << enter << buffer << endl;
       string sbuffer(buffer);
       cleanupString(sbuffer);
       vector<string> lineItems = split(sbuffer, ' ');
@@ -1169,6 +1320,7 @@ void runUI() {
     if ("i" == enter || "inj"  == enter) {
       char buffer[200];
       cin.getline(buffer, 200, '\n');
+      LOG << enter << buffer << endl;
       string sbuffer(buffer);
       vector<string> lineItems;
       cleanupString(sbuffer);
@@ -1209,6 +1361,7 @@ void runUI() {
     // ----------------------------------------------------------------------
     if ("reg"  == enter) {
       cin >> enter2;
+      LOG << hex << enter << enter2 << dec << endl;
       cout << hex << enter << " " << enter2 << " entered" <<endl;
       readRegister(enter2);
       continue;
@@ -1232,6 +1385,7 @@ void runUI() {
     // ----------------------------------------------------------------------
     if ("ddr3"  == enter) {
       cin >> enter2;
+      LOG << hex << enter << enter2 << dec << endl;
       cout << hex << enter << " " << enter2 << " entered" <<endl;
       if (1 == enter2) {
 	gDDR3 = true;
@@ -1244,6 +1398,7 @@ void runUI() {
     // ----------------------------------------------------------------------
     if ("histos"  == enter) {
       cin >> enter2;
+      LOG << enter << enter2 << endl;
       cout << enter << " " << enter2 << " entered" <<endl;
       if (1 == enter2) {
 	gHistos = true;
