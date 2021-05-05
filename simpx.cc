@@ -22,6 +22,7 @@
 #include <TFile.h>
 #include <TH1D.h>
 #include <TH2D.h>
+#include <TMath.h>
 
 using namespace std;
 using namespace mudaq;
@@ -630,7 +631,7 @@ void setupMpx() {
   // INJECTION PIXEL
   PixAddr pix_inj = PixAddr(gInjCol, gInjRow);
   // AMPOUT ROW
-  uint32_t row_ampout = 0;
+  uint32_t row_ampout = gInjCol;
   // ????????
   uint8_t ColRegVal = 0;
   s0->update_ColRegVal(ColRegVal);
@@ -1092,6 +1093,113 @@ void scanInjV(string swhat = "test", int vmin = 300, int vmax = 900, int vstep =
 }
 
 
+// ----------------------------------------------------------------------
+// scanDAC: scan DAC from dmin to dmax in steps of step
+//           and plot it.
+//           pixel inject and mask configuration is done beforehand!
+// ----------------------------------------------------------------------
+void scanDAC(string dac = "ThLow", int dmin = 70, int dmax = 100, int step = 5) {
+  uint32_t nwords(10000);
+  string filename("");
+  ofstream logfile;
+  logfile.open(Form("scan-%s.log", dac.c_str()), ios::out|ios::trunc);
+
+  gInjMilliVolt = 400;
+
+  uint origValue = (*chipdacs_map[0])[dac]->get_value();
+
+  TH1D *hq = new TH1D("hq", "hq", 500, 0., 500.);
+  TH1D *htot = new TH1D("htot", "htot", 500, 0., 500.);
+
+  TFile *f = TFile::Open(Form("scan-%s.root", dac.c_str()), "RECREATE");
+  TH1D *h1 = new TH1D(Form("h1"), Form("h1: hits vs DAC (%s)", dac.c_str()), 256, 0., 256.);
+  TH1D *h2 = new TH1D(Form("h2"), Form("h2: Q vs DAC (%s)", dac.c_str()), 256, 0., 256.);
+  TH1D *h3 = new TH1D(Form("h3"), Form("h3: TOT vs DAC (%s)", dac.c_str()), 256, 0., 256.);
+
+  string sdac("");
+  for (int idac = dmin; idac <= dmax; idac += step) {
+    inject(0);
+    sleep(1);
+
+    sdac = Form("%x", idac);
+    cout << "sdac =  " << sdac << endl;
+    setDAC(dac, sdac);
+
+    cout << dec << "setupMpx() for " << dac << " = " << dec << idac << hex << " (" << idac << ")"  << endl;
+    logfile << dec << "setupMpx() for " << dac << " = " << dec << idac << hex << " (" << idac << ")"  << endl;
+
+    setupMpx();
+    sleep(2);
+
+    filename = Form("scanDac-%s-MemoryDump-dac%d.txt", dac.c_str(), idac);
+
+    cout << "start injection" << endl;
+    inject(1);
+    // -- wait long enough(?) to fill memory with new data
+    sleep(10);
+
+    mem(nwords, 0, filename);
+
+    cout << "parse file to vector" << endl;
+    txt2vect(filename);
+
+    // -- simple analysis
+    logfile << filename << endl;
+    double qinj(0.), tot(0.);
+    int nhits(0), nwrongHits(0);
+    hq->Reset();
+    htot->Reset();
+    for (unsigned int ievt = 0; ievt < eVector.size(); ++ievt) {
+      for (unsigned int ihit = 0; ihit < eVector[ievt].nhit; ++ihit) {
+	// -- take also neighboring hits
+	if (TMath::Abs(gInjCol - eVector[ievt].col[ihit]) < 2 && TMath::Abs(gInjRow - eVector[ievt].row[ihit]) < 2) {
+	  ++nhits;
+	  hq->Fill(eVector[ievt].q[ihit]);
+	  htot->Fill(eVector[ievt].tot[ihit]);
+	  logfile << dec  << filename << " evt " << ievt << " "
+		  << "  hit " << ihit << "(nhit: " << eVector[ievt].nhit << ")"
+		  << " col: " << eVector[ievt].col[ihit] << " row: " << eVector[ievt].row[ihit]
+		  << " q: " << eVector[ievt].q[ihit]
+		  << " tot: " << eVector[ievt].tot[ihit]
+		  << " thit: " << eVector[ievt].t[ihit]
+		  << endl;
+	} else {
+	  ++nwrongHits;
+	}
+      }
+    }
+    logfile << "hits: " << nhits << " and " <<  nwrongHits << " wrong hits. "
+	    << " <q> = " << hq->GetMean() << " +/- " << hq->GetMeanError()
+	    << " <tot> = " << htot->GetMean() << " +/- " << htot->GetMeanError()
+	    << endl;
+    h1->SetBinContent(h2->FindBin(idac), nhits);
+    h1->SetBinError(h1->FindBin(idac), TMath::Sqrt(nhits));
+
+    h2->SetBinContent(h2->FindBin(idac), hq->GetMean());
+    h2->SetBinError(h2->FindBin(idac), hq->GetMeanError());
+
+    h3->SetBinContent(h3->FindBin(idac), htot->GetMean());
+    h3->SetBinError(h3->FindBin(idac), htot->GetMeanError());
+
+    inject(0);
+
+  }
+
+  // --set injection voltage to safe(?) value
+  sdac = Form("%x", origValue);
+  setDAC(dac, sdac);
+  setupMpx();
+  inject(1);
+  sleep(1);
+  inject(0);
+
+  f->Write();
+  f->Close();
+
+  logfile.close();
+}
+
+
 
 // ----------------------------------------------------------------------
 void runUI() {
@@ -1113,23 +1221,24 @@ void runUI() {
 
     if ("menu" == enter || "help" == enter) {
       LOG << enter << endl;
-      cout << " q                            quit" << endl;
-      cout << " areg val msk off old         play around  with append_register" << endl;
-      cout << " s | setup                    setup chip" << endl;
-      cout << " c | conf                     configure chip" << endl;
-      cout << " dac DACNAME VAL              set dac DACNAME to value VAL" << endl;
-      cout << " dac DACNAME                  read dac DACNAME value" << endl;
-      cout << " inj [pix icol irow] [1|0]    injection [start|stop]" << endl;
-      cout << " hb [icol|irow]               hitbus [icol|irow]" << endl;
-      cout << " m[em] [nwords|20] [offset|0] read read-only(?) memory for nwords with offset" << endl;
-      cout << " z                            zero memory" << endl;
-      cout << " memrw nwords [offset|0]      read read-write memory for nwords with offset" << endl;
-      cout << " printreg                     print registers" << endl;
-      cout << " colrow                       testing column/row decoding" << endl;
-      cout << " scaninjv vmin vmax vstep bla scan inj voltage (mV) from vmin to vmax with stepsize vstep (string mod bla)" << endl;
-      cout << " reg REG                      read ro/rw register REG" << endl;
-      cout << " ro  [nevt|-1]                start readout" << endl;
-      cout << " ddr3 [0|1]                   set various parameters" << endl;
+      cout << " q                             quit" << endl;
+      cout << " areg val msk off old          play around  with append_register" << endl;
+      cout << " s | setup                     setup chip" << endl;
+      cout << " c | conf                      configure chip" << endl;
+      cout << " dac DACNAME VAL               set dac DACNAME to value VAL" << endl;
+      cout << " dac DACNAME                   read dac DACNAME value" << endl;
+      cout << " inj [pix icol irow] [1|0]     injection [start|stop]" << endl;
+      cout << " hb [icol|irow]                hitbus [icol|irow]" << endl;
+      cout << " m[em] [nwords|20] [offset|0]  read read-only(?) memory for nwords with offset" << endl;
+      cout << " z                             zero memory" << endl;
+      cout << " memrw nwords [offset|0]       read read-write memory for nwords with offset" << endl;
+      cout << " printreg                      print registers" << endl;
+      cout << " colrow                        testing column/row decoding" << endl;
+      cout << " scaninjv Th vmin vmax vstep   scan inj voltage (mV) from vmin to vmax with stepsize vstep (string mod bla)" << endl;
+      cout << " scandac dmin dmax step ThLow  scan DAC from dmin to dmax with stepsize step" << endl;
+      cout << " reg REG                       read ro/rw register REG" << endl;
+      cout << " ro  [nevt|-1]                 start readout" << endl;
+      cout << " ddr3 [0|1]                    set various parameters" << endl;
     }
 
 
@@ -1178,6 +1287,36 @@ void runUI() {
       }
 
       scanInjV(swhat, vini, vend, vstep);
+    }
+
+
+    // ----------------------------------------------------------------------
+    if ("scandac" == enter) {
+      cout << enter << " entered: scandac" << endl;
+      int vini(0), vend(0), vstep(0);
+      string swhat("");
+
+      char buffer[200];
+      cin.getline(buffer, 200, '\n');
+      LOG << enter << buffer << endl;
+      string sbuffer(buffer);
+      cleanupString(sbuffer);
+      vector<string> lineItems = split(sbuffer, ' ');
+
+      cout << endl;
+
+      if (4 == lineItems.size()) {
+	swhat = lineItems[0];
+	vini  = std::stoul(lineItems[1], nullptr, 10);
+	vend  = std::stoul(lineItems[2], nullptr, 10);
+	vstep = std::stoul(lineItems[3], nullptr, 10);
+      } else {
+	cout << "incorrect number of arguments. Correct usage:" << endl;
+	cout << " scandac dac dmin dmax step    scan DAC  from dmin to dmax with stepsize step (string mod bla)" << endl;
+	continue;
+      }
+
+      scanDAC(swhat, vini, vend, vstep);
     }
 
 
@@ -1420,7 +1559,7 @@ int main(int argc, char *argv[]) {
   gHistos = gDDR3 = false;
   gInjCol = gHBCol = 20;
   gInjRow = gHBRow = 0;
-  gInjMilliVolt = 600;
+  gInjMilliVolt = 400;
   gInjFreq = 6000;
 
   // -- command line arguments
