@@ -631,7 +631,7 @@ void setupMpx() {
   // INJECTION PIXEL
   PixAddr pix_inj = PixAddr(gInjCol, gInjRow);
   // AMPOUT ROW
-  uint32_t row_ampout = gInjCol;
+  uint32_t row_ampout = gInjCol;  // ???????? but this results in a ampout signal?!
   // ????????
   uint8_t ColRegVal = 0;
   s0->update_ColRegVal(ColRegVal);
@@ -641,6 +641,7 @@ void setupMpx() {
   s0->clear_inj_vecs();
   s0->clear_pixel_mask();
 
+  (*chipdacs_map[0])["disable_HB"]->set_value(0x1);
   hitbus(gHBCol, gHBRow);
 
   s0->set_injection_pixel(pix_inj);
@@ -648,6 +649,9 @@ void setupMpx() {
 
   s0->add_col_to_inj_vec(gInjCol);
   s0->add_row_to_inj_vec(gInjRow);
+
+  cout << "inject pixel col = " << gInjCol << " row = " << gInjRow << endl;
+  cout << "hitbus pixel col = " << gHBCol  << " row = " << gHBRow << endl;
 
   configureMpx();
 }
@@ -912,6 +916,7 @@ void modMemory() {
 // ----------------------------------------------------------------------
 void inject(int what) {
   if (1 == what) {
+    cout << "inject col = " << gInjCol << " row = " <<  gInjRow << endl;
     uint16_t voltage = volt_to_14bit_reg(gInjMilliVolt);
     s0->set_injection(voltage, 1 /*duration*/, gInjFreq /*frequency*/, 100 /*counts*/);
     // s0->set_injection_pixel(PixAddr(20, 0));
