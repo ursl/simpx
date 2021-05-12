@@ -1226,24 +1226,24 @@ void runUI() {
 
     if ("menu" == enter || "help" == enter) {
       LOG << enter << endl;
-      cout << " q                             quit" << endl;
-      cout << " areg val msk off old          play around  with append_register" << endl;
-      cout << " s | setup                     setup chip" << endl;
-      cout << " c | conf                      configure chip" << endl;
-      cout << " dac DACNAME VAL               set dac DACNAME to value VAL" << endl;
-      cout << " dac DACNAME                   read dac DACNAME value" << endl;
-      cout << " inj [pix icol irow] [1|0]     injection [start|stop]" << endl;
-      cout << " hb [icol|irow]                hitbus [icol|irow]" << endl;
-      cout << " m[em] [nwords|20] [offset|0]  read read-only(?) memory for nwords with offset" << endl;
-      cout << " z                             zero memory" << endl;
-      cout << " memrw nwords [offset|0]       read read-write memory for nwords with offset" << endl;
-      cout << " printreg                      print registers" << endl;
-      cout << " colrow                        testing column/row decoding" << endl;
-      cout << " scaninjv Th vmin vmax vstep   scan inj voltage (mV) from vmin to vmax with stepsize vstep (string mod bla)" << endl;
-      cout << " scandac dmin dmax step ThLow  scan DAC from dmin to dmax with stepsize step" << endl;
-      cout << " reg REG                       read ro/rw register REG" << endl;
-      cout << " ro  [nevt|-1]                 start readout" << endl;
-      cout << " ddr3 [0|1]                    set various parameters" << endl;
+      cout << " q                                       quit" << endl;
+      cout << " areg val msk off old                    play around  with append_register" << endl;
+      cout << " s | setup                               setup chip" << endl;
+      cout << " c | conf                                configure chip" << endl;
+      cout << " dac DACNAME VAL                         set dac DACNAME to value VAL" << endl;
+      cout << " dac DACNAME                             read dac DACNAME value" << endl;
+      cout << " i[nj] [pix icol irow] [v 100] [1|0]     injection [start|stop]" << endl;
+      cout << " hb [icol|irow]                          hitbus [icol|irow]" << endl;
+      cout << " m[em] [nwords|20] [offset|0]            read read-only(?) memory for nwords with offset" << endl;
+      cout << " z                                       zero memory" << endl;
+      cout << " memrw nwords [offset|0]                 read read-write memory for nwords with offset" << endl;
+      cout << " printreg                                print registers" << endl;
+      cout << " colrow                                  testing column/row decoding" << endl;
+      cout << " scaninjv Th vmin vmax vstep             scan inj voltage (mV) from vmin to vmax with stepsize vstep (string mod bla)" << endl;
+      cout << " scandac dmin dmax step ThLow            scan DAC from dmin to dmax with stepsize step" << endl;
+      cout << " reg REG                                 read ro/rw register REG" << endl;
+      cout << " ro  [nevt|-1]                           start readout" << endl;
+      cout << " ddr3 [0|1]                              set various parameters" << endl;
     }
 
 
