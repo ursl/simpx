@@ -15,6 +15,7 @@
 #include "../library/mudaq_device.hpp"
 #include "../library/Buffertemplate.hpp"
 #include "../library/sensorConfig.hpp"
+#include "../library/telescope_frame.hpp"
 #include "../library/tdacs.hpp"
 
 #include "../library/utils.hpp"
@@ -306,6 +307,12 @@ void txt2vect(string filename) {
   }
 
   // -- fill vector
+  TelescopeFrame *tf(0);
+  uint tag(0x0);
+  int beginOfData(6);
+  //  tag = ((*data)[beginOfData]>>26)/4;//for multilink and normal telescope setup!
+
+
   bool print = false;
   //  print = true;
   int oldT(0), oldTS(0);
@@ -324,6 +331,34 @@ void txt2vect(string filename) {
       uint32_t raw    = vro[i][6+2*ihit];
       uint32_t hittot = vro[i][7+2*ihit];
 
+      //     _tot->Fill(int(graycode_decode(ts2)));
+
+      // library/telescope_frame.hpp:
+      // uint16_t timestamp_raw() const {if(_mupix % 10 <= 3)return (_graystamp);//ts1 is decoded
+      //                                     else return graycode_decode(_graystamp)/*&0x3ff*/;}//ts1 is encoded
+      // uint8_t tot() const { return _tot; }
+
+
+      // gui/workers/monitorworker.cpp:
+      //  _sensorhistos.at(index)->Fill_hit(rawhit.column(), rawhit.row(), rawhit.timestamp_raw(),
+      //                                    graycode_encode(rawhit.tot()), (int)gray, bitmap,sensorinfos.at(index).tot.back() );
+
+
+      // library/monitor_histograms.cpp:
+      // void SensorHistograms::Fill_hit(uint16_t col, uint16_t row, uint timestamp, uint ts2, int graystamp, uint tsbitmap, uint tot)
+      // {
+      //     _hitmap->Fill(col, row);
+      //     _timestamps->Fill(int(timestamp));
+      //     _graystamps->Fill(graystamp);
+      //     for(int i = 0; i < 11; i++)
+      //         if((((timestamp & 0x7FF)>>i)&0x1)==0x1)
+      //             _ts_bitmaps->Fill(/*int(tsbitmap)*/i);
+      //     _tot->Fill(int(graycode_decode(ts2)));
+      //     _tot_hit_corr->Fill(int(timestamp),  int(graycode_decode(ts2)));
+      //     _tot_hit_diff->Fill(tot);
+      // }
+
+
       if (1) {
 	// conversion from digital row/col indices to physical row/col indices
 	// this is from telescope_frame.hpp.
@@ -341,6 +376,7 @@ void txt2vect(string filename) {
 
 	graystamp = (0x3FF & (raw >> TS_OFFSET));
 	graystamp += (((0x20&tot)>>5)<<10);
+
       }
 
       transform_col_row_MPX(col, row);
@@ -349,7 +385,7 @@ void txt2vect(string filename) {
 
       a.tot.push_back(tot);
       a.gs.push_back(graystamp);
-      a.gs.push_back(tag);
+      a.tag.push_back(tag);
 
       a.q.push_back(((vro[i][7+2*ihit] & 0x0000f600) >> 10)); //?? useless??
       a.t.push_back((vro[i][7+2*ihit] & 0x000003ff));         //?? useless??
@@ -388,7 +424,7 @@ void mem(uint32_t nwords, uint32_t offset, string outputfilename) {
       // << "(EOE_ADDRESS_OFFSET = "  << EOE_ADDRESS_OFFSET  << "/EOE_ADDRESS_MASK = " << EOE_ADDRESS_MASK
 	 << endl;
     cout << "dev->read_register_ro(MEM_ADDRESS_REGISTER_R) = " << hex
-	 << dev->read_register_ro(MEM_ADDRESS_REGISTER_R)
+	 << setw(20) << dev->read_register_ro(MEM_ADDRESS_REGISTER_R)
 	 << endl;
   } else {
     cout << hex
@@ -401,7 +437,7 @@ void mem(uint32_t nwords, uint32_t offset, string outputfilename) {
       // << "(EOE_ADDRESS_OFFSET = "  << EOE_ADDRESS_OFFSET  << "/EOE_ADDRESS_MASK = " << EOE_ADDRESS_MASK
 	 << endl;
     cout << "dev->read_register_ro(MEM_ADDRESS_REGISTER_R) = " << hex
-	 << dev->read_register_ro(MEM_ADDRESS_REGISTER_R)
+	 << setw(20) << dev->read_register_ro(MEM_ADDRESS_REGISTER_R)
 	 << endl;
   }
   for (int i = istart; i < istart+ntot; i = i+10) {
@@ -412,7 +448,7 @@ void mem(uint32_t nwords, uint32_t offset, string outputfilename) {
     }
     for (int j = i; j < i+10; ++j) {
       if (toFile) {
-	file << setw(10) << dev->read_memory(j& MUDAQ_MEM_RO_MASK) ;
+	file << setw(10) << dev->(j& MUDAQ_MEM_RO_MASK) ;
       } else {
 	cout << setw(10) << dev->read_memory(j& MUDAQ_MEM_RO_MASK) ;
       }
@@ -1256,6 +1292,7 @@ void runUI() {
       dev->zero_wrmem();
       dev->reset_FPGA_RO();
       dev->reset_DDR3_memory();
+      dev->reset_ROMEMWRITER();
     }
 
     // ----------------------------------------------------------------------
